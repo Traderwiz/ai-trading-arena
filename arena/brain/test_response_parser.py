@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from arena.brain.response_parser import AgentParseError, parse_agent_response
+from arena.brain.response_parser import AgentParseError, parse_agent_response, parse_comms_response, parse_trade_response
 
 
 class ResponseParserTests(unittest.TestCase):
@@ -37,6 +37,16 @@ class ResponseParserTests(unittest.TestCase):
     def test_raises_on_unparseable_input(self):
         with self.assertRaises(AgentParseError):
             parse_agent_response("not json at all")
+
+    def test_parse_trade_response_accepts_trade_only_shape(self):
+        decision = parse_trade_response('{"symbol":"eth","side":"buy","quantity":"1","confidence":"7"}')
+        self.assertEqual(decision.trade["symbol"], "ETH")
+        self.assertEqual(decision.trade["confidence"], 7)
+
+    def test_parse_comms_response_accepts_comms_shape(self):
+        decision = parse_comms_response('{"chat":"Hello","social":null}')
+        self.assertEqual(decision.chat, "Hello")
+        self.assertIsNone(decision.social)
 
 
 if __name__ == "__main__":

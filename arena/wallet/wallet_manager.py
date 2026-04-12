@@ -44,11 +44,13 @@ class TradeExecution:
     symbol: str
     side: str
     quantity: float
+    requested_quantity: float
     price_usdc: float
     usdc_value: float
     fee_usdc: float
     tx_hash: str | None
     error: str | None
+    adjustment_note: str | None = None
 
 
 class WalletManager:
@@ -64,6 +66,12 @@ class WalletManager:
         self.config = config or {}
         self.network_id = self.config.get("network_id", "base-mainnet")
         self.wallets = self.config.get("wallets") or {}
+        self.asset_registry = {
+            str(symbol).upper(): dict(payload)
+            for symbol, payload in (self.config.get("assets") or {}).items()
+            if isinstance(payload, dict)
+        }
+        self.native_gas_reserve_eth = float(self.config.get("native_gas_reserve_eth", 0.0001))
         self.provider_factory = provider_factory or self._default_provider_factory
         self.sleep_fn = sleep_fn or time.sleep
         self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
@@ -94,7 +102,12 @@ class WalletManager:
             if symbol == USDC_SYMBOL:
                 cash_usdc += quantity
                 continue
-            price_usdc = self._get_price_usdc(provider, symbol)
+            asset_identifier = balance.get("contract_address") or symbol
+            decimals = int(balance.get("decimals", self._token_decimals(symbol)))
+            try:
+                price_usdc = self._get_price_usdc(provider, asset_identifier, decimals=decimals)
+            except Exception:
+                price_usdc = 0.0
             positions[symbol] = Position(
                 symbol=symbol,
                 quantity=quantity,
@@ -115,7 +128,18 @@ class WalletManager:
         provider = self._get_provider(agent_name)
         symbol = str(trade.get("symbol", "")).upper()
         side = str(trade.get("side", "")).lower()
-        quantity = float(trade.get("quantity", 0.0))
+        requested_quantity = float(trade.get("quantity", 0.0))
+        quantity, adjustment_note = self._adjust_quantity_for_gas_reserve(provider, symbol, side, requested_quantity)
+        if quantity <= 0:
+            return self._failed_execution(
+                agent_name,
+                symbol,
+                side,
+                0.0,
+                requested_quantity,
+                "Insufficient balance after reserving gas",
+                adjustment_note=adjustment_note,
+            )
         from_symbol, to_symbol = self._determine_swap_assets(symbol, side)
         price_usdc = self._get_price_usdc(provider, symbol)
         usdc_value = quantity * price_usdc
@@ -133,6 +157,8 @@ class WalletManager:
                     side,
                     quantity,
                     result,
+                    requested_quantity=requested_quantity,
+                    adjustment_note=adjustment_note,
                     price_usdc=price_usdc,
                     usdc_value=usdc_value,
                 )
@@ -140,12 +166,28 @@ class WalletManager:
                 last_error = exc
                 error_message = str(exc)
                 if "slippage" in error_message.lower():
-                    return self._failed_execution(agent_name, symbol, side, quantity, "High Slippage")
+                    return self._failed_execution(
+                        agent_name,
+                        symbol,
+                        side,
+                        quantity,
+                        requested_quantity,
+                        "High Slippage",
+                        adjustment_note=adjustment_note,
+                    )
                 if attempt > len(RETRY_BACKOFF_SECONDS):
                     break
                 self.sleep_fn(delay or 0)
 
-        return self._failed_execution(agent_name, symbol, side, quantity, str(last_error) if last_error else "Unknown wallet error")
+        return self._failed_execution(
+            agent_name,
+            symbol,
+            side,
+            quantity,
+            requested_quantity,
+            str(last_error) if last_error else "Unknown wallet error",
+            adjustment_note=adjustment_note,
+        )
 
     def get_portfolio_value(self, agent_name: str) -> float:
         return self.get_wallet_state(agent_name).total_equity_usdc
@@ -177,6 +219,16 @@ class WalletManager:
             "network_id": self.network_id,
             "wallet_reference": self.wallets[agent_name],
         }
+
+    def supported_symbols(self) -> set[str]:
+        supported = {ETH_SYMBOL}
+        supported.update(self.asset_registry.keys())
+        try:
+            from coinbase_agentkit.action_providers.erc20.constants import TOKEN_ADDRESSES_BY_SYMBOLS
+        except ImportError:
+            return supported
+        supported.update(TOKEN_ADDRESSES_BY_SYMBOLS.get(self.network_id, {}).keys())
+        return {str(symbol).upper() for symbol in supported}
 
     def _default_provider_factory(self, agent_name: str, wallet_config: dict):
         try:
@@ -234,6 +286,7 @@ class WalletManager:
                     "symbol": symbol or getattr(getattr(balance, "token", None), "contract_address", ""),
                     "quantity": quantity,
                     "contract_address": getattr(getattr(balance, "token", None), "contract_address", None),
+                    "decimals": int(decimals) if decimals is not None else None,
                 }
             )
 
@@ -261,27 +314,28 @@ class WalletManager:
     def _cdp_network_name(self) -> str:
         return "base" if self.network_id == "base-mainnet" else self.network_id
 
-    def _get_price_usdc(self, provider, symbol: str) -> float:
+    def _get_price_usdc(self, provider, symbol_or_address: str, decimals: int | None = None) -> float:
         if hasattr(provider, "get_price_usdc"):
-            return float(provider.get_price_usdc(symbol))
+            return float(provider.get_price_usdc(symbol_or_address))
         if hasattr(provider, "get_price"):
-            return float(provider.get_price(symbol, quote=USDC_SYMBOL))
+            return float(provider.get_price(symbol_or_address, quote=USDC_SYMBOL))
         client = self._get_cdp_client(provider)
         taker = provider.get_address() if hasattr(provider, "get_address") else None
         if client is None or taker is None:
-            raise WalletManagerError(f"Wallet provider does not expose a pricing method for {symbol}")
+            raise WalletManagerError(f"Wallet provider does not expose a pricing method for {symbol_or_address}")
+        from_decimals = decimals if decimals is not None else self._token_decimals(symbol_or_address)
         result = self._await(
             client.evm.get_swap_price(
-                from_token=self._token_address_for_symbol(symbol),
+                from_token=self._token_address_for_symbol(symbol_or_address),
                 to_token=self._token_address_for_symbol(USDC_SYMBOL),
-                from_amount=self._to_base_units(1.0, self._token_decimals(symbol)),
+                from_amount=self._to_base_units(1.0, from_decimals),
                 network=self._cdp_network_name(),
                 taker=taker,
             )
         )
         to_amount = getattr(result, "to_amount", None)
         if to_amount is None:
-            raise WalletManagerError(f"Unable to fetch swap price for {symbol}")
+            raise WalletManagerError(f"Unable to fetch swap price for {symbol_or_address}")
         return float(to_amount) / (10 ** self._token_decimals(USDC_SYMBOL))
 
     def _swap(self, provider, from_asset: str, to_asset: str, quantity: int):
@@ -379,6 +433,8 @@ class WalletManager:
         side: str,
         quantity: float,
         result: Any,
+        requested_quantity: float,
+        adjustment_note: str | None = None,
         price_usdc: float | None = None,
         usdc_value: float | None = None,
     ) -> TradeExecution:
@@ -403,27 +459,65 @@ class WalletManager:
             symbol=symbol,
             side=side,
             quantity=quantity,
+            requested_quantity=requested_quantity,
             price_usdc=float(price_usdc),
             usdc_value=float(usdc_value),
             fee_usdc=fee_usdc,
             tx_hash=tx_hash,
             error=payload.get("error"),
+            adjustment_note=adjustment_note,
         )
 
     @staticmethod
-    def _failed_execution(agent_name: str, symbol: str, side: str, quantity: float, error: str) -> TradeExecution:
+    def _failed_execution(
+        agent_name: str,
+        symbol: str,
+        side: str,
+        quantity: float,
+        requested_quantity: float,
+        error: str,
+        adjustment_note: str | None = None,
+    ) -> TradeExecution:
         return TradeExecution(
             success=False,
             agent_name=agent_name,
             symbol=symbol,
             side=side,
             quantity=quantity,
+            requested_quantity=requested_quantity,
             price_usdc=0.0,
             usdc_value=0.0,
             fee_usdc=0.0,
             tx_hash=None,
             error=error,
+            adjustment_note=adjustment_note,
         )
+
+    def _adjust_quantity_for_gas_reserve(self, provider, symbol: str, side: str, quantity: float) -> tuple[float, str | None]:
+        if side != "sell" or symbol != ETH_SYMBOL:
+            return quantity, None
+
+        available = self._native_balance_eth(provider) - self.native_gas_reserve_eth
+        if available <= 0:
+            return 0.0, (
+                f"Requested {quantity:.8f} {ETH_SYMBOL}, but {self.native_gas_reserve_eth:.8f} {ETH_SYMBOL} is reserved for gas."
+            )
+        adjusted = min(quantity, available)
+        if adjusted < quantity:
+            return adjusted, (
+                f"Requested {quantity:.8f} {ETH_SYMBOL}, executed {adjusted:.8f} {ETH_SYMBOL} "
+                f"after reserving {self.native_gas_reserve_eth:.8f} {ETH_SYMBOL} for gas."
+            )
+        return adjusted, None
+
+    def _native_balance_eth(self, provider) -> float:
+        if hasattr(provider, "get_balance"):
+            return float(provider.get_balance()) / (10**18)
+        for balance in self._fetch_balances(provider):
+            symbol = str(balance.get("symbol") or "").upper()
+            if symbol == ETH_SYMBOL:
+                return float(balance.get("quantity") or 0.0)
+        return 0.0
 
     def _trade_from_amount(self, quantity: float, side: str, symbol: str, price_usdc: float) -> int:
         if side == "buy":
@@ -431,9 +525,15 @@ class WalletManager:
         return self._to_base_units(quantity, self._token_decimals(symbol))
 
     def _token_address_for_symbol(self, symbol: str) -> str:
-        normalized = str(symbol).upper()
+        raw_value = str(symbol)
+        if raw_value.startswith("0x") and len(raw_value) == 42:
+            return raw_value
+        normalized = raw_value.upper()
         if normalized == ETH_SYMBOL:
             return ETH_PSEUDO_ADDRESS
+        registry_entry = self.asset_registry.get(normalized)
+        if registry_entry and registry_entry.get("address"):
+            return str(registry_entry["address"])
         try:
             from coinbase_agentkit.action_providers.erc20.constants import TOKEN_ADDRESSES_BY_SYMBOLS
         except ImportError as exc:
@@ -444,9 +544,11 @@ class WalletManager:
             return address
         raise WalletManagerError(f"No on-chain token address mapping for symbol {normalized} on {self.network_id}")
 
-    @staticmethod
-    def _token_decimals(symbol: str) -> int:
+    def _token_decimals(self, symbol: str) -> int:
         normalized = str(symbol).upper()
+        registry_entry = self.asset_registry.get(normalized)
+        if registry_entry and registry_entry.get("decimals") is not None:
+            return int(registry_entry["decimals"])
         if normalized in {USDC_SYMBOL, "USDT", "EURC"}:
             return 6
         if normalized in {"BTC", "WBTC", "CBBTC"}:

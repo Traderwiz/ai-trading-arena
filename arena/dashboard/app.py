@@ -17,6 +17,7 @@ from arena.dashboard.components.portfolio import render_portfolios
 from arena.dashboard.components.trades_table import render_trades
 from arena.dashboard.config import DISCLAIMER, REFRESH_INTERVAL_MS, derive_phase, derive_status
 from arena.dashboard.supabase_client import get_client
+from arena.dashboard.time_utils import format_timestamp_eastern
 
 
 st.set_page_config(
@@ -67,7 +68,7 @@ def _render_header(status: str, current_phase: str, latest_loop: dict | None) ->
     last_updated = latest_loop.get("completed_at") if latest_loop else None
     if not last_updated:
         last_updated = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    cols[2].markdown(f"**Last updated:** {last_updated}")
+    cols[2].markdown(f"**Last updated:** {format_timestamp_eastern(last_updated, fallback=last_updated)}")
     st.warning(DISCLAIMER, icon="⚠️")
 
 

@@ -38,6 +38,26 @@ wallet:
   cdp_api_key_secret: "${CDP_API_KEY_SECRET}"
   wallet_secret: "${CDP_WALLET_SECRET}"
   network_id: "base-mainnet"
+  native_gas_reserve_eth: 0.0001
+  assets:
+    BTC:
+      address: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+      decimals: 8
+    AERO:
+      address: "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
+      decimals: 18
+    CBETH:
+      address: "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22"
+      decimals: 18
+    CLANKER:
+      address: "0x1bc0c42215582d5a085795f4badbac3ff36d1bcb"
+      decimals: 18
+    ZORA:
+      address: "0x1111111111166b7FE7bd91427724B487980aFc69"
+      decimals: 18
+    BNKR:
+      address: "0x22af33fe49fd1fa80c7149773dde5890d3c76f3b"
+      decimals: 18
   wallets:
     grok: "0xFb173EEE2532BD7Ecb35dB37CDe928366C22e88f"
     deepseek: "0x837F0C48609A5c2d5b9224957D2E33C4E91ee5f4"
@@ -75,3 +95,13 @@ memory:
   weekly_summary_day: 6
   summary_model: "deepseek-chat"
   summary_max_tokens: 300
+
+market_data:
+  exchange_base_url: "https://api.exchange.coinbase.com"
+  max_symbols: 6
+  reference_symbols:
+    - ETH
+    - BTC
+    - AERO
+    - CBETH
+    - ZORA

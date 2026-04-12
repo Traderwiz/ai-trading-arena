@@ -3,6 +3,7 @@ from __future__ import annotations
 import streamlit as st
 
 from arena.dashboard.config import ordinal
+from arena.dashboard.time_utils import format_timestamp_eastern
 
 
 def render_eliminations(elimination_rows: list[dict], trades_rows: list[dict]) -> None:
@@ -16,7 +17,7 @@ def render_eliminations(elimination_rows: list[dict], trades_rows: list[dict]) -
             st.markdown(f"### {row.get('agent_name', '').title()} - {ordinal(int(finish_place)) if finish_place else 'Eliminated'}")
             st.markdown(f"**Final equity:** ${float(row.get('final_equity_usdc', 0)):.2f}")
             st.markdown(f"**Type:** {row.get('elimination_type', 'unknown').title()}")
-            st.markdown(f"**Timestamp:** {row.get('timestamp', '')}")
+            st.markdown(f"**Timestamp:** {format_timestamp_eastern(row.get('timestamp'), fallback=str(row.get('timestamp', '')))}")
             if row.get("last_words"):
                 st.markdown(f"**Last words:** {row['last_words']}")
             fatal_trade = trade_map.get(row.get("fatal_trade_id"))

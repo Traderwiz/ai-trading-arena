@@ -100,6 +100,15 @@ class ActivityTrackerTests(unittest.TestCase):
         )
         self.assertEqual(status.qualifying_trades, 0)
 
+    def test_low_equity_trade_counts_at_ten_percent_threshold(self):
+        status = self.tracker.update_activity(
+            "grok",
+            {"symbol": "ETH", "usdc_value": 2.95, "success": True},
+            total_equity_usdc=29.50,
+            now=self.now,
+        )
+        self.assertEqual(status.qualifying_trades, 1)
+
     def test_weekly_escalation_reaches_elimination(self):
         self.supabase.tables["activity_tracking"] = [
             {"agent_name": "grok", "week_start": "2026-04-06", "qualifying_trades": 0, "daily_chats_completed": 0, "flag_status": "clear"},

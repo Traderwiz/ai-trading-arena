@@ -3,6 +3,8 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from arena.dashboard.time_utils import format_timestamp_eastern
+
 
 def render_trades(trades_rows: list[dict]) -> None:
     st.subheader("Recent Trades")
@@ -18,7 +20,7 @@ def render_trades(trades_rows: list[dict]) -> None:
         tx_hash = row.get("tx_hash")
         table_rows.append(
             {
-                "Timestamp": row.get("timestamp"),
+                "Timestamp": format_timestamp_eastern(row.get("timestamp"), fallback=str(row.get("timestamp", ""))),
                 "Agent": row.get("agent_name"),
                 "Side": str(row.get("side", "")).upper(),
                 "Symbol": row.get("symbol"),

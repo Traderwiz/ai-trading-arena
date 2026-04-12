@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from arena.brain.main import ArenaLoop
+from arena.brain.market_data import MarketSnapshot
 from arena.sanity.sanity_checker import SanityChecker
 from arena.wallet.wallet_manager import Position, TradeExecution, WalletState
 
@@ -136,10 +137,26 @@ class FakeWalletManager:
 
     def execute_trade(self, agent_name, trade):  # noqa: ARG002
         self.after_trade = True
-        return TradeExecution(True, agent_name, "ETH", "buy", 0.01, 2000, 20, 0.05, "0xhash", None)
+        return TradeExecution(
+            True,
+            agent_name,
+            "ETH",
+            "buy",
+            0.01,
+            0.0125,
+            2000,
+            20,
+            0.05,
+            "0xhash",
+            None,
+            "Requested 0.01250000 ETH, executed 0.01000000 ETH after reserving 0.00010000 ETH for gas.",
+        )
 
     def liquidate_all(self, agent_name):  # noqa: ARG002
         return []
+
+    def supported_symbols(self):
+        return {"ETH"}
 
 
 class FakeTelegram:
@@ -170,6 +187,23 @@ class FakeXClient:
     def post(self, agent_name, content):
         self.posts.append((agent_name, content))
         return {"id": "tweet123"}
+
+
+class FakeMarketDataProvider:
+    def build_snapshots(self, wallet_states, recent_trades, active_agents, supported_symbols=None):  # noqa: ARG002
+        return [
+            MarketSnapshot(
+                symbol="ETH",
+                product_id="ETH-USD",
+                price_usdc=2000.0,
+                return_1h_pct=1.0,
+                return_4h_pct=2.0,
+                return_24h_pct=3.0,
+                volume_24h_usd=1000000.0,
+                volatility_24h_pct=4.0,
+                status="ok",
+            ).to_dict()
+        ]
 
 
 class ArenaLoopIntegrationTests(unittest.TestCase):
@@ -210,6 +244,7 @@ class ArenaLoopIntegrationTests(unittest.TestCase):
             llm_clients=llm_clients,
             telegram=telegram,
             x_client=x_client,
+            market_data_provider=FakeMarketDataProvider(),
             now_provider=lambda: datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc),
         )
         loop._execute_loop()
@@ -219,6 +254,13 @@ class ArenaLoopIntegrationTests(unittest.TestCase):
         self.assertTrue(supabase.tables["social_posts"])
         self.assertTrue(supabase.tables["standings"])
         self.assertTrue(x_client.posts)
+        self.assertIn("[execution_adjustment]", supabase.tables["trades"][0]["reasoning"])
+        self.assertTrue(any("trade adjusted" in message for message in telegram.other))
+        latest_loop = supabase.tables["loop_log"][0]
+        self.assertIn("agent_diagnostics", latest_loop["errors"])
+        self.assertEqual(latest_loop["errors"]["agent_diagnostics"]["grok"]["market_snapshot_symbols"], ["ETH"])
+        self.assertIn("parsed_trade_decision", latest_loop["errors"]["agent_diagnostics"]["grok"])
+        self.assertIn("parsed_comms_decision", latest_loop["errors"]["agent_diagnostics"]["grok"])
 
     @unittest.skipUnless(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_KEY"), "Live Supabase credentials not configured")
     def test_live_supabase_harness_placeholder(self):

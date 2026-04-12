@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sanity_checker import SanityChecker
+from arena.sanity.sanity_checker import SanityChecker
 
 
 class FakeResponse:
@@ -90,6 +90,7 @@ class SanityCheckerTests(unittest.TestCase):
                 "blocked_words_path": str(self.blocked_words_path),
                 "validation_log_path": str(self.log_path),
                 "symbol_provider": lambda: self.symbols,
+                "executable_symbol_provider": lambda: {"ETH", "DOGE", "PEPE"},
                 "price_provider": lambda symbol: self.prices[symbol],
                 "liquidity_provider": lambda symbol: self.liquidities[symbol],
                 "now_provider": lambda: self.now,
@@ -117,6 +118,12 @@ class SanityCheckerTests(unittest.TestCase):
         trade = {"symbol": "ETH", "side": "sell", "quantity": 0.1, "reasoning": "Take profit", "confidence": 6}
         result = self.checker.validate_trade("grok", trade, self.wallet_state)
         self.assertTrue(result.approved)
+
+    def test_symbol_must_be_executable(self):
+        trade = {"symbol": "SOL", "side": "buy", "quantity": 0.1}
+        result = self.checker.validate_trade("grok", trade, self.wallet_state)
+        self.assertFalse(result.approved)
+        self.assertEqual(result.rejection_reason, "Symbol SOL is not executable on the configured Base wallet")
 
     def test_sell_full_position(self):
         trade = {"symbol": "ETH", "side": "sell", "quantity": 0.5, "reasoning": "Exit", "confidence": 5}
@@ -205,6 +212,7 @@ class SanityCheckerTests(unittest.TestCase):
                 "blocked_words_path": str(self.blocked_words_path),
                 "validation_log_path": str(self.log_path),
                 "symbol_provider": lambda: self.symbols,
+                "executable_symbol_provider": lambda: {"ETH", "DOGE", "PEPE"},
                 "price_provider": lambda symbol: self.prices[symbol],
                 "liquidity_provider": lambda symbol: (_ for _ in ()).throw(RuntimeError("down")),
                 "now_provider": lambda: self.now,
@@ -323,6 +331,7 @@ class SanityCheckerTests(unittest.TestCase):
                 "blocked_words_path": str(self.blocked_words_path),
                 "validation_log_path": str(self.log_path),
                 "symbol_provider": lambda: self.symbols,
+                "executable_symbol_provider": lambda: {"ETH", "DOGE", "PEPE"},
                 "price_provider": lambda symbol: self.prices[symbol],
                 "liquidity_provider": lambda symbol: self.liquidities[symbol],
                 "now_provider": lambda: self.now,
@@ -339,6 +348,7 @@ class SanityCheckerTests(unittest.TestCase):
                 "blocked_words_path": str(self.blocked_words_path),
                 "validation_log_path": str(self.log_path),
                 "symbol_provider": lambda: self.symbols,
+                "executable_symbol_provider": lambda: {"ETH", "DOGE", "PEPE"},
                 "price_provider": lambda symbol: self.prices[symbol],
                 "liquidity_provider": lambda symbol: self.liquidities[symbol],
                 "now_provider": lambda: self.now,

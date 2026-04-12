@@ -112,7 +112,7 @@ class ActivityTracker:
         if symbol in STABLECOINS:
             return False
         usdc_value = float(trade_details.get("usdc_value") or 0)
-        threshold = max(self.min_trade_value_usdc, total_equity_usdc * self.min_trade_value_percent)
+        threshold = min(self.min_trade_value_usdc, total_equity_usdc * self.min_trade_value_percent)
         return usdc_value >= threshold
 
     def _count_consecutive_missed_weeks(self, agent_name: str, current_week_start: date) -> int:

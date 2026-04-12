@@ -17,7 +17,41 @@ class AgentDecision:
     social: str | None
 
 
+@dataclass
+class TradeDecision:
+    trade: dict | None
+
+
+@dataclass
+class CommsDecision:
+    chat: str
+    social: str | None
+
+
 def parse_agent_response(raw_json: str | dict[str, Any]) -> AgentDecision:
+    payload = _parse_payload(raw_json)
+    return AgentDecision(
+        trade=_normalize_trade(payload.get("trade")),
+        chat=_normalize_chat(payload.get("chat")),
+        social=_normalize_social(payload.get("social")),
+    )
+
+
+def parse_trade_response(raw_json: str | dict[str, Any]) -> TradeDecision:
+    payload = _parse_payload(raw_json)
+    trade_payload = payload.get("trade") if "trade" in payload else payload
+    return TradeDecision(trade=_normalize_trade(trade_payload))
+
+
+def parse_comms_response(raw_json: str | dict[str, Any]) -> CommsDecision:
+    payload = _parse_payload(raw_json)
+    return CommsDecision(
+        chat=_normalize_chat(payload.get("chat")),
+        social=_normalize_social(payload.get("social")),
+    )
+
+
+def _parse_payload(raw_json: str | dict[str, Any]) -> dict[str, Any]:
     if isinstance(raw_json, dict):
         payload = raw_json
     else:
@@ -32,11 +66,7 @@ def parse_agent_response(raw_json: str | dict[str, Any]) -> AgentDecision:
 
     if not isinstance(payload, dict):
         raise AgentParseError("Agent response must be a JSON object")
-
-    trade = _normalize_trade(payload.get("trade"))
-    chat = _normalize_chat(payload.get("chat"))
-    social = _normalize_social(payload.get("social"))
-    return AgentDecision(trade=trade, chat=chat, social=social)
+    return payload
 
 
 def _clean_raw_json(raw: str) -> str:
@@ -44,7 +74,6 @@ def _clean_raw_json(raw: str) -> str:
     if stripped.startswith("```"):
         stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
         stripped = re.sub(r"\s*```$", "", stripped)
-
     start = stripped.find("{")
     end = stripped.rfind("}")
     if start == -1 or end == -1 or end < start:
@@ -85,7 +114,6 @@ def _normalize_trade(value: Any) -> dict | None:
         "reasoning": reasoning,
         "confidence": confidence_value,
     }
-
     if not symbol or side not in {"buy", "sell"} or quantity_value is None:
         return None
     return normalized

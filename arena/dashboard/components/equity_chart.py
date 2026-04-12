@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from arena.dashboard.config import AGENT_COLORS, STARTING_LINE_COLOR, THRESHOLD_COLOR
+from arena.dashboard.time_utils import EASTERN_TZ
 
 
 def render_equity_chart(standings_rows: list[dict]) -> None:
@@ -17,7 +18,7 @@ def render_equity_chart(standings_rows: list[dict]) -> None:
     if df.empty:
         st.info("Competition not yet started.")
         return
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert(EASTERN_TZ)
     if len(df) > 1000:
         df = df.groupby("agent_name", group_keys=False).apply(lambda group: group.iloc[:: max(1, len(group) // 250)]).reset_index(drop=True)
 

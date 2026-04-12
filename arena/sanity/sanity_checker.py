@@ -83,6 +83,7 @@ class SanityChecker:
             "https://api.dexscreener.com/latest/dex/search/?q={symbol}",
         )
         self.symbol_provider: Callable[[], set[str]] | None = self.config.get("symbol_provider")
+        self.executable_symbol_provider: Callable[[], set[str]] | None = self.config.get("executable_symbol_provider")
         self.price_provider: Callable[[str], float] | None = self.config.get("price_provider")
         self.liquidity_provider: Callable[[str], float] | None = self.config.get("liquidity_provider")
         self.now_provider: Callable[[], datetime] = self.config.get("now_provider", lambda: datetime.now(timezone.utc))
@@ -115,6 +116,9 @@ class SanityChecker:
 
         if not self._symbol_exists(symbol_upper):
             return self._reject_trade(agent_name, trade_input, f"Symbol {symbol_upper} not available on Coinbase", warnings)
+
+        if not self._symbol_is_executable(symbol_upper):
+            return self._reject_trade(agent_name, trade_input, f"Symbol {symbol_upper} is not executable on the configured Base wallet", warnings)
 
         try:
             quantity_value = float(quantity)
@@ -462,6 +466,21 @@ class SanityChecker:
         with self._lock:
             self._liquidity_cache[symbol] = (self.now_provider(), liquidity)
         return liquidity
+
+    def _symbol_is_executable(self, symbol: str) -> bool:
+        if self.executable_symbol_provider is not None:
+            try:
+                return symbol in {str(item).upper() for item in self.executable_symbol_provider()}
+            except Exception as exc:
+                raise DependencyUnavailable("Unable to verify executable symbol set") from exc
+
+        if symbol == "ETH":
+            return True
+        try:
+            from coinbase_agentkit.action_providers.erc20.constants import TOKEN_ADDRESSES_BY_SYMBOLS
+        except Exception as exc:  # noqa: BLE001
+            raise DependencyUnavailable("Unable to verify executable symbol set") from exc
+        return symbol in {str(item).upper() for item in TOKEN_ADDRESSES_BY_SYMBOLS.get(self.config.get("network_id", "base-mainnet"), {}).keys()}
 
     def _query_count(self, table_name: str, filters: list[tuple[str, str, Any]]) -> int:
         query = self.supabase.table(table_name).select("id", count="exact", head=True)

@@ -18,13 +18,16 @@ Files:
 
 - Sequential 30-minute agent loop with randomized order each cycle
 - Shared context loading from Supabase
-- Prompt construction from portfolio, leaderboard, chat, trades, memory, activity, alerts, and trigger state
+- Prompt construction from portfolio, leaderboard, chat, trades, market snapshots, memory, activity, alerts, and trigger state
 - Unified LLM routing through the OpenAI SDK
 - LM Studio fallback to DeepSeek for local-model outages
 - Sanity checker validation before trade/chat/social execution
 - Wallet-manager execution for approved trades
 - Activity tracking, elimination watch, and memory-summary hooks
 - Telegram notifications and X posting
+- Coinbase public-market snapshots for recent/held reference symbols
+- Per-agent loop diagnostics written into `loop_log.errors.agent_diagnostics`
+- LLM usage metadata written into `loop_log.token_usage` when the provider returns it
 
 ## Important persistence choices
 

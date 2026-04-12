@@ -3,6 +3,7 @@ from __future__ import annotations
 import streamlit as st
 
 from arena.dashboard.config import AGENT_COLORS
+from arena.dashboard.time_utils import format_timestamp_eastern
 
 
 def render_chat(chat_rows: list[dict]) -> None:
@@ -16,7 +17,7 @@ def render_chat(chat_rows: list[dict]) -> None:
         sender = row.get("sender", "unknown")
         message = row.get("message", "")
         trigger_type = _format_trigger(row.get("trigger_type"))
-        timestamp = row.get("timestamp", "")
+        timestamp = format_timestamp_eastern(row.get("timestamp"), fallback=str(row.get("timestamp", "")))
         if sender in {"system", "arena"}:
             st.markdown(
                 f"<div style='padding:0.5rem 0;color:#AAAAAA;font-style:italic'><span>{timestamp}</span> <strong>{sender}</strong> {message}</div>",

@@ -60,6 +60,7 @@ class LLMClient:
         self.config = all_configs[agent_name]
         self.client = client or OpenAI(base_url=self.config["base_url"], api_key=self.config["api_key"])
         self.model = self.config["model"]
+        self.last_response_meta: dict[str, Any] = {}
 
     @property
     def is_local(self) -> bool:
@@ -97,6 +98,15 @@ class LLMClient:
             raw = response.choices[0].message.content
         except Exception as exc:  # noqa: BLE001
             raise LLMError("LLM response missing message content") from exc
+        usage = getattr(response, "usage", None)
+        self.last_response_meta = {
+            "model": self.model,
+            "usage": {
+                "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                "completion_tokens": getattr(usage, "completion_tokens", None),
+                "total_tokens": getattr(usage, "total_tokens", None),
+            },
+        }
         if not raw:
             raise LLMError("LLM returned empty content")
         return raw

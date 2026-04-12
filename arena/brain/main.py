@@ -20,9 +20,15 @@ from arena.brain.activity_tracker import ActivityTracker
 from arena.brain.chat_triggers import determine_chat_triggers
 from arena.brain.elimination import EliminationManager
 from arena.brain.llm_client import LLMClient, LLMError
+from arena.brain.market_data import MarketDataProvider
 from arena.brain.memory_manager import MemoryManager
-from arena.brain.prompt_builder import build_system_prompt, build_user_prompt
-from arena.brain.response_parser import AgentParseError, parse_agent_response
+from arena.brain.prompt_builder import (
+    build_comms_system_prompt,
+    build_comms_user_prompt,
+    build_trade_system_prompt,
+    build_trade_user_prompt,
+)
+from arena.brain.response_parser import AgentParseError, parse_comms_response, parse_trade_response
 from arena.brain.telegram_notifier import TelegramNotifier
 from arena.brain.x_client import XClient
 from arena.sanity.sanity_checker import SanityChecker
@@ -59,6 +65,7 @@ class ArenaLoop:
         activity_tracker: ActivityTracker | None = None,
         memory_manager: MemoryManager | None = None,
         elimination_manager: EliminationManager | None = None,
+        market_data_provider: MarketDataProvider | None = None,
         now_provider=None,
         sleep_fn=None,
         randomizer=None,
@@ -70,12 +77,21 @@ class ArenaLoop:
         self.randomizer = randomizer or random
         self.supabase = supabase_client or init_supabase(self.config)
         self.wallet_manager = wallet_manager or WalletManager(self.config.get("wallet", {}))
-        self.sanity_checker = sanity_checker or SanityChecker(self.supabase, self.config)
+        if sanity_checker is not None:
+            self.sanity_checker = sanity_checker
+        else:
+            sanity_config = dict(self.config)
+            sanity_config["executable_symbol_provider"] = self.wallet_manager.supported_symbols
+            self.sanity_checker = SanityChecker(self.supabase, sanity_config)
         self.llm_clients = llm_clients or {name: LLMClient(name, self.config) for name in AGENT_NAMES}
         self.telegram = telegram or TelegramNotifier(self.config.get("telegram"))
         self.x_client = x_client or XClient(self.config.get("x_api"))
         self.activity_tracker = activity_tracker or ActivityTracker(self.supabase, self.config, now_provider=self.now_provider)
         self.memory_manager = memory_manager or MemoryManager(self.supabase, self.config, now_provider=self.now_provider)
+        self.market_data_provider = market_data_provider or MarketDataProvider(
+            self.config.get("market_data"),
+            now_provider=self.now_provider,
+        )
         self.elimination_manager = elimination_manager or EliminationManager(
             self.supabase,
             self.wallet_manager,
@@ -91,6 +107,8 @@ class ArenaLoop:
         self.shutdown_requested = False
         self.current_loop_errors: dict[str, Any] = {}
         self.current_loop_fallback_agents: list[str] = []
+        self.current_loop_diagnostics: dict[str, Any] = {}
+        self.current_loop_token_usage: dict[str, Any] = {}
         self.allowed_agents = list(self.config.get("loop", {}).get("active_agents", AGENT_NAMES))
         self._install_signal_handlers()
 
@@ -128,6 +146,8 @@ class ArenaLoop:
         active_agents = self._get_active_agents()
         self.current_loop_errors = {}
         self.current_loop_fallback_agents = []
+        self.current_loop_diagnostics = {}
+        self.current_loop_token_usage = {}
         self._log_loop_start(loop_start, active_agents)
 
         if len(active_agents) <= 1:
@@ -157,48 +177,108 @@ class ArenaLoop:
 
     def _process_agent(self, agent_name: str, shared_context: dict) -> None:
         wallet_state = self.wallet_manager.get_wallet_state(agent_name)
+        diagnostics = {
+            "pre_wallet": self._wallet_summary(wallet_state),
+            "market_snapshot_symbols": [row.get("symbol") for row in shared_context.get("market_snapshots", [])],
+        }
         memory = self.memory_manager.get_latest_summaries(agent_name)
         activity = self.activity_tracker.get_status(agent_name)
         rejections = self._get_pending_rejections(agent_name)
         trigger_bundle = shared_context["trigger_bundle"]
+        agent_shared_context = dict(shared_context)
+        agent_shared_context["trade_limits"] = self._trade_limits_for_agent(agent_name, wallet_state, shared_context)
 
-        system_prompt = build_system_prompt(agent_name, trigger_bundle)
-        user_prompt = build_user_prompt(agent_name, wallet_state, shared_context, memory, activity, rejections, trigger_bundle)
-        decision = self._get_agent_decision(agent_name, system_prompt, user_prompt)
+        trade_system_prompt = build_trade_system_prompt(agent_name)
+        trade_user_prompt = build_trade_user_prompt(agent_name, wallet_state, agent_shared_context, memory, activity, rejections)
+        trade_decision, trade_raw_response = self._get_trade_decision(agent_name, trade_system_prompt, trade_user_prompt)
+        diagnostics["trade_raw_response"] = self._truncate_text(trade_raw_response)
+        diagnostics["parsed_trade_decision"] = trade_decision.trade if trade_decision else None
+        trade_usage = self._llm_usage(agent_name)
 
         trade_execution = None
-        if decision and decision.trade:
-            trade_result = self.sanity_checker.validate_trade(agent_name, decision.trade, asdict(wallet_state))
+        trade_result = None
+        if trade_decision and trade_decision.trade:
+            trade_result = self.sanity_checker.validate_trade(agent_name, trade_decision.trade, asdict(wallet_state))
+            diagnostics["trade_validation"] = {
+                "approved": trade_result.approved,
+                "rejection_reason": trade_result.rejection_reason,
+                "warnings": trade_result.warnings,
+            }
             if trade_result.approved:
-                trade_execution = self.wallet_manager.execute_trade(agent_name, decision.trade)
+                trade_execution = self.wallet_manager.execute_trade(agent_name, trade_decision.trade)
+                diagnostics["trade_execution"] = self._trade_execution_summary(trade_execution)
                 if trade_execution.success:
-                    self._log_trade(agent_name, decision.trade, trade_execution)
-                    shared_context["recent_trades"].insert(0, self._trade_row(agent_name, decision.trade, trade_execution))
+                    self._log_trade(agent_name, trade_decision.trade, trade_execution)
+                    shared_context["recent_trades"].insert(0, self._trade_row(agent_name, trade_decision.trade, trade_execution))
                     shared_context["recent_trades"] = shared_context["recent_trades"][:10]
+                    if trade_execution.adjustment_note:
+                        self.telegram.send_medium(f"ℹ️ {agent_name} trade adjusted: {trade_execution.adjustment_note}")
                     self.telegram.send_low(
                         f"🔄 {agent_name}: {trade_execution.side} {trade_execution.quantity} {trade_execution.symbol} @ ${trade_execution.price_usdc:.4f} (${trade_execution.usdc_value:.2f})"
                     )
                 else:
                     self.current_loop_errors.setdefault(agent_name, {})["trade_execution"] = trade_execution.error
+                    if trade_execution.adjustment_note:
+                        self.telegram.send_medium(f"ℹ️ {agent_name} trade adjusted: {trade_execution.adjustment_note}")
                     self.telegram.send_medium(f"⚠️ {agent_name} trade execution failed: {trade_execution.error}")
             else:
                 self.telegram.send_medium(f"⚠️ {agent_name} trade rejected: {trade_result.rejection_reason}")
+        else:
+            diagnostics["trade_validation"] = {"approved": False, "rejection_reason": "No trade submitted", "warnings": []}
+
+        trade_context = {
+            "decision": trade_decision.trade if trade_decision else None,
+            "validation": diagnostics.get("trade_validation"),
+            "execution": diagnostics.get("trade_execution"),
+        }
+        comms_system_prompt = build_comms_system_prompt(agent_name, trigger_bundle)
+        comms_user_prompt = build_comms_user_prompt(
+            agent_name,
+            wallet_state,
+            agent_shared_context,
+            memory,
+            activity,
+            rejections,
+            trigger_bundle,
+            trade_context=trade_context,
+        )
+        comms_decision, comms_raw_response = self._get_comms_decision(agent_name, comms_system_prompt, comms_user_prompt)
+        diagnostics["comms_raw_response"] = self._truncate_text(comms_raw_response)
+        diagnostics["parsed_comms_decision"] = {
+            "chat": self._truncate_text(comms_decision.chat) if comms_decision else None,
+            "social": self._truncate_text(comms_decision.social) if comms_decision and comms_decision.social else None,
+        }
+        comms_usage = self._llm_usage(agent_name)
+        self.current_loop_token_usage[agent_name] = {
+            "trade_decision": trade_usage,
+            "communications": comms_usage,
+        }
 
         chat_posted = False
-        if decision:
+        if comms_decision:
             chat_result = self.sanity_checker.validate_chat(
                 agent_name,
-                decision.chat,
+                comms_decision.chat,
                 {"trigger_type": trigger_bundle.primary_trigger_type},
             )
+            diagnostics["chat_validation"] = {
+                "approved": chat_result.approved,
+                "rejection_reason": chat_result.rejection_reason,
+                "message": self._truncate_text(chat_result.message),
+            }
             if chat_result.approved:
                 self._write_chat(agent_name, chat_result.message, trigger_bundle)
                 shared_context["recent_chat"].append({"sender": agent_name, "message": chat_result.message})
                 shared_context["recent_chat"] = shared_context["recent_chat"][-20:]
                 chat_posted = True
 
-            if decision.social:
-                social_result = self.sanity_checker.validate_social(agent_name, decision.social)
+            if comms_decision.social:
+                social_result = self.sanity_checker.validate_social(agent_name, comms_decision.social)
+                diagnostics["social_validation"] = {
+                    "approved": social_result.approved,
+                    "rejection_reason": social_result.rejection_reason,
+                    "post": self._truncate_text(social_result.post),
+                }
                 if social_result.approved:
                     post_result = self.x_client.post(agent_name, social_result.post)
                     publish_status = "pending" if post_result.get("status") == "disabled" else "posted"
@@ -206,8 +286,11 @@ class ArenaLoop:
                     self.telegram.send_low(f"📱 {agent_name}: {social_result.post[:50]}...")
                 else:
                     self.telegram.send_medium(f"⚠️ {agent_name} post blocked: {social_result.rejection_reason}")
+            else:
+                diagnostics["social_validation"] = {"approved": False, "rejection_reason": "No social post submitted", "post": None}
 
         updated_wallet = self.wallet_manager.get_wallet_state(agent_name)
+        diagnostics["post_wallet"] = self._wallet_summary(updated_wallet)
         self._write_standings(agent_name, updated_wallet)
         self._replace_positions(agent_name, updated_wallet)
         self.activity_tracker.update_activity(
@@ -216,19 +299,43 @@ class ArenaLoop:
             updated_wallet.total_equity_usdc,
             chat_posted=chat_posted,
         )
+        diagnostics["activity_status"] = self._activity_summary(self.activity_tracker.get_status(agent_name))
+        if trade_execution:
+            diagnostics["trade_qualification"] = {
+                "qualified": self.activity_tracker.trade_qualifies(asdict(trade_execution), updated_wallet.total_equity_usdc),
+                "trade_usdc_value": trade_execution.usdc_value,
+                "threshold_usdc": min(
+                    self.activity_tracker.min_trade_value_usdc,
+                    updated_wallet.total_equity_usdc * self.activity_tracker.min_trade_value_percent,
+                ),
+            }
+        self.current_loop_diagnostics[agent_name] = diagnostics
         self.elimination_manager.record_equity(agent_name, updated_wallet.total_equity_usdc, updated_wallet.timestamp.isoformat())
 
-    def _get_agent_decision(self, agent_name: str, system_prompt: str, user_prompt: str):
+    def _get_trade_decision(self, agent_name: str, system_prompt: str, user_prompt: str):
         raw_response = self._call_llm(agent_name, system_prompt, user_prompt)
         try:
-            return parse_agent_response(raw_response)
+            return parse_trade_response(raw_response), raw_response
         except AgentParseError:
             retry_prompt = user_prompt + "\nYour previous response was not valid JSON. Respond with ONLY a JSON object."
             try:
-                return parse_agent_response(self._call_llm(agent_name, system_prompt, retry_prompt))
+                retry_response = self._call_llm(agent_name, system_prompt, retry_prompt)
+                return parse_trade_response(retry_response), retry_response
+            except Exception:  # noqa: BLE001
+                return None, raw_response
+
+    def _get_comms_decision(self, agent_name: str, system_prompt: str, user_prompt: str):
+        raw_response = self._call_llm(agent_name, system_prompt, user_prompt)
+        try:
+            return parse_comms_response(raw_response), raw_response
+        except AgentParseError:
+            retry_prompt = user_prompt + "\nYour previous response was not valid JSON. Respond with ONLY a JSON object."
+            try:
+                retry_response = self._call_llm(agent_name, system_prompt, retry_prompt)
+                return parse_comms_response(retry_response), retry_response
             except Exception:  # noqa: BLE001
                 self._write_fallback_chat(agent_name)
-                return None
+                return None, raw_response
 
     def _call_llm(self, agent_name: str, system_prompt: str, user_prompt: str) -> str:
         client = self.llm_clients[agent_name]
@@ -248,6 +355,13 @@ class ArenaLoop:
         current_standings = self._fetch_rows("current_standings")
         previous_standings = self._get_previous_standings(active_agents)
         alerts = self._get_system_alerts(active_agents)
+        wallet_states = {agent_name: self.wallet_manager.get_wallet_state(agent_name) for agent_name in active_agents}
+        market_snapshots = self.market_data_provider.build_snapshots(
+            wallet_states,
+            recent_trades,
+            active_agents,
+            supported_symbols=self.wallet_manager.supported_symbols(),
+        )
         trigger_bundle = determine_chat_triggers(now, recent_trades, current_standings, previous_standings, active_agents)
         return {
             "loop_number": self.loop_number,
@@ -255,6 +369,8 @@ class ArenaLoop:
             "leaderboard": leaderboard,
             "recent_chat": recent_chat,
             "recent_trades": recent_trades,
+            "market_snapshots": market_snapshots,
+            "wallet_states": wallet_states,
             "current_standings": current_standings,
             "alerts": alerts,
             "trigger_bundle": trigger_bundle,
@@ -309,11 +425,16 @@ class ArenaLoop:
             "errors": {
                 "agent_errors": self.current_loop_errors,
                 "fallback_mode": self.current_loop_fallback_agents,
+                "agent_diagnostics": self.current_loop_diagnostics,
             },
+            "token_usage": self.current_loop_token_usage,
         }
         self.supabase.table("loop_log").update(payload).eq("loop_number", self.loop_number).execute()
 
     def _log_trade(self, agent_name: str, trade: dict, execution) -> None:
+        reasoning = trade.get("reasoning")
+        if execution.adjustment_note:
+            reasoning = f"{reasoning}\n[execution_adjustment] {execution.adjustment_note}" if reasoning else f"[execution_adjustment] {execution.adjustment_note}"
         self.supabase.table("trades").insert(
             {
                 "agent_name": agent_name,
@@ -325,7 +446,7 @@ class ArenaLoop:
                 "fee_usdc": execution.fee_usdc,
                 "tx_hash": execution.tx_hash,
                 "loop_number": self.loop_number,
-                "reasoning": trade.get("reasoning"),
+                "reasoning": reasoning,
                 "confidence": trade.get("confidence"),
             }
         ).execute()
@@ -455,6 +576,92 @@ class ArenaLoop:
                 signal.signal(sig, handle_signal)
             except ValueError:
                 continue
+
+    @staticmethod
+    def _truncate_text(value: str | None, limit: int = 600) -> str | None:
+        if value is None:
+            return None
+        text = str(value)
+        return text if len(text) <= limit else text[:limit] + "...[truncated]"
+
+    @staticmethod
+    def _wallet_summary(wallet_state) -> dict[str, Any]:
+        return {
+            "cash_usdc": wallet_state.cash_usdc,
+            "total_equity_usdc": wallet_state.total_equity_usdc,
+            "positions": {
+                symbol: {
+                    "quantity": position.quantity,
+                    "price_usdc": position.current_price_usdc,
+                    "value_usdc": position.value_usdc,
+                }
+                for symbol, position in wallet_state.positions.items()
+            },
+            "timestamp": wallet_state.timestamp.isoformat(),
+        }
+
+    @staticmethod
+    def _trade_execution_summary(trade_execution) -> dict[str, Any]:
+        return {
+            "success": trade_execution.success,
+            "symbol": trade_execution.symbol,
+            "side": trade_execution.side,
+            "requested_quantity": trade_execution.requested_quantity,
+            "executed_quantity": trade_execution.quantity,
+            "price_usdc": trade_execution.price_usdc,
+            "usdc_value": trade_execution.usdc_value,
+            "fee_usdc": trade_execution.fee_usdc,
+            "tx_hash": trade_execution.tx_hash,
+            "error": trade_execution.error,
+            "adjustment_note": trade_execution.adjustment_note,
+        }
+
+    @staticmethod
+    def _activity_summary(activity_status) -> dict[str, Any]:
+        return {
+            "qualifying_trades": activity_status.qualifying_trades,
+            "daily_chats_completed": activity_status.daily_chats_completed,
+            "flag_status": activity_status.flag_status,
+            "warning": activity_status.warning,
+        }
+
+    def _llm_usage(self, agent_name: str) -> dict[str, Any]:
+        client = self.llm_clients.get(agent_name)
+        if client is None:
+            return {}
+        return dict(getattr(client, "last_response_meta", {}) or {})
+
+    def _trade_limits_for_agent(self, agent_name: str, wallet_state, shared_context: dict) -> dict[str, Any]:
+        cap_percent = float(getattr(self.sanity_checker, "max_trade_percent", 0.29))
+        raw_max_notional = min(wallet_state.cash_usdc, wallet_state.total_equity_usdc * cap_percent)
+        max_notional = raw_max_notional * 0.985
+        symbol_limits: list[dict[str, Any]] = []
+        for snapshot in shared_context.get("market_snapshots", []):
+            if snapshot.get("status") != "ok":
+                continue
+            price = snapshot.get("price_usdc")
+            try:
+                price_value = float(price)
+            except (TypeError, ValueError):
+                continue
+            if price_value <= 0:
+                continue
+            symbol_limits.append(
+                {
+                    "symbol": snapshot.get("symbol"),
+                    "price_usdc": price_value,
+                    "max_buy_quantity": max_notional / price_value,
+                    "max_buy_notional_usdc": max_notional,
+                }
+            )
+        return {
+            "agent_name": agent_name,
+            "max_trade_percent": cap_percent,
+            "raw_max_buy_notional_usdc": raw_max_notional,
+            "max_buy_notional_usdc": max_notional,
+            "cash_usdc": wallet_state.cash_usdc,
+            "symbol_limits": symbol_limits,
+        }
 
 
 def _resolve_env(value):

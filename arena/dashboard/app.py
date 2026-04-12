@@ -16,7 +16,7 @@ from arena.dashboard.components.leaderboard import render_leaderboard
 from arena.dashboard.components.operator_panel import render_operator_panel
 from arena.dashboard.components.portfolio import render_portfolios
 from arena.dashboard.components.trades_table import render_trades
-from arena.dashboard.config import DISCLAIMER, REFRESH_INTERVAL_MS, derive_phase, derive_status
+from arena.dashboard.config import DEFAULT_INTERVAL_SECONDS, DISCLAIMER, REFRESH_INTERVAL_MS, derive_phase, derive_status
 from arena.dashboard.supabase_client import get_client
 from arena.dashboard.time_utils import format_timestamp_eastern
 
@@ -48,7 +48,10 @@ def main() -> None:
     active_count = len([row for row in agents if row.get("status") == "active"])
     elimination_count = len(elimination_rows)
     current_phase = derive_phase(active_count, elimination_count)
-    competition_status = "COMPLETE" if active_count <= 1 and agents else derive_status(latest_loop.get("completed_at") if latest_loop else None, 60)
+    competition_status = "COMPLETE" if active_count <= 1 and agents else derive_status(
+        latest_loop.get("completed_at") if latest_loop else None,
+        DEFAULT_INTERVAL_SECONDS,
+    )
 
     _render_header(competition_status, current_phase, latest_loop)
     render_leaderboard(leaderboard_rows, agents, elimination_rows)

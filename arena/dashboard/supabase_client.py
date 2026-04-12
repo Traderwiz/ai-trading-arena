@@ -73,17 +73,32 @@ def get_client():
     url = _get_secret("SUPABASE_URL")
     key = _get_secret("SUPABASE_SERVICE_KEY") or _get_secret("SUPABASE_READER_KEY")
     if not url:
-        raise RuntimeError("Set SUPABASE_URL in Streamlit secrets or environment variables")
+        raise RuntimeError("Set SUPABASE_URL in Streamlit secrets, a [supabase] section, or environment variables")
     if not key:
-        raise RuntimeError("Set SUPABASE_SERVICE_KEY or SUPABASE_READER_KEY")
+        raise RuntimeError("Set SUPABASE_SERVICE_KEY or SUPABASE_READER_KEY in Streamlit secrets, a [supabase] section, or environment variables")
     return DashboardSupabaseClient(create_client(url, key))
 
 
 def _get_secret(key: str) -> str | None:
     try:
         import streamlit as st
-        if key in st.secrets:
+        try:
             return str(st.secrets[key])
+        except (KeyError, FileNotFoundError):
+            pass
+
+        lower_key = key.lower()
+        for section_name in ("supabase", "general"):
+            try:
+                section = st.secrets[section_name]
+            except (KeyError, FileNotFoundError):
+                continue
+
+            if isinstance(section, dict):
+                if key in section:
+                    return str(section[key])
+                if lower_key in section:
+                    return str(section[lower_key])
     except Exception:
         pass
     return os.environ.get(key)

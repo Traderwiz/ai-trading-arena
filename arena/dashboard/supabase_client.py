@@ -54,6 +54,13 @@ class DashboardSupabaseClient:
         rows = self._read("loop_log", order=("loop_number", True), limit=1)
         return rows[0] if rows else None
 
+    def get_latest_completed_loop_log(self):
+        rows = self._read("loop_log", order=("loop_number", True), limit=10)
+        for row in rows:
+            if row.get("completed_at"):
+                return row
+        return None
+
     def get_current_week_activity(self):
         week_start = (datetime.now(timezone.utc) - timedelta(days=datetime.now(timezone.utc).weekday())).date().isoformat()
         return self._read("activity_tracking", filters={"week_start": week_start}, order=("agent_name", False))

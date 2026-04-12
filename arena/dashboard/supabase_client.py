@@ -79,12 +79,11 @@ def get_client():
     return DashboardSupabaseClient(create_client(url, key))
 
 
-def _get_secret(name: str) -> str | None:
-    if st is not None:
-        try:
-            value = st.secrets.get(name)
-            if value:
-                return str(value)
-        except Exception:
-            pass
-    return os.getenv(name)
+def _get_secret(key: str) -> str | None:
+    try:
+        import streamlit as st
+        if key in st.secrets:
+            return str(st.secrets[key])
+    except Exception:
+        pass
+    return os.environ.get(key)

@@ -11,7 +11,9 @@ Files:
 - [trades_table.py](/C:/Users/gaber/projects/ai_trading_arena/arena/dashboard/components/trades_table.py)
 - [chat_feed.py](/C:/Users/gaber/projects/ai_trading_arena/arena/dashboard/components/chat_feed.py)
 - [activity_status.py](/C:/Users/gaber/projects/ai_trading_arena/arena/dashboard/components/activity_status.py)
+- [operator_panel.py](/C:/Users/gaber/projects/ai_trading_arena/arena/dashboard/components/operator_panel.py)
 - [elimination_log.py](/C:/Users/gaber/projects/ai_trading_arena/arena/dashboard/components/elimination_log.py)
+- [time_utils.py](/C:/Users/gaber/projects/ai_trading_arena/arena/dashboard/time_utils.py)
 - [requirements.txt](/C:/Users/gaber/projects/ai_trading_arena/arena/dashboard/requirements.txt)
 - [config.toml](/C:/Users/gaber/projects/ai_trading_arena/arena/dashboard/.streamlit/config.toml)
 
@@ -33,6 +35,7 @@ Environment:
 
 - Read-only dashboard: every query is `SELECT` only.
 - Empty-state handling is built in for leaderboard, equity chart, trades, chat, activity, and eliminations.
+- Operator view includes latest loop diagnostics, token usage, and recent trade rejections from read-only Supabase queries.
 - Auto-refresh runs every 60 seconds via `streamlit-autorefresh`.
 - Agent colors match the spec:
   - Grok `#FF6B35`

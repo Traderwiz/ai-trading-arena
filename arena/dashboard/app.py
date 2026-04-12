@@ -13,6 +13,7 @@ from arena.dashboard.components.chat_feed import render_chat
 from arena.dashboard.components.elimination_log import render_eliminations
 from arena.dashboard.components.equity_chart import render_equity_chart
 from arena.dashboard.components.leaderboard import render_leaderboard
+from arena.dashboard.components.operator_panel import render_operator_panel
 from arena.dashboard.components.portfolio import render_portfolios
 from arena.dashboard.components.trades_table import render_trades
 from arena.dashboard.config import DISCLAIMER, REFRESH_INTERVAL_MS, derive_phase, derive_status
@@ -42,6 +43,7 @@ def main() -> None:
     activity_rows = client.get_current_week_activity() or client.get_activity_tracking()
     elimination_rows = client.get_eliminations()
     latest_loop = client.get_latest_loop_log()
+    rejection_rows = client.get_recent_trade_rejections(limit=20)
 
     active_count = len([row for row in agents if row.get("status") == "active"])
     elimination_count = len(elimination_rows)
@@ -55,6 +57,7 @@ def main() -> None:
     render_trades(trades_rows)
     render_chat(chat_rows)
     render_activity_status(activity_rows)
+    render_operator_panel(latest_loop, rejection_rows)
     render_eliminations(elimination_rows, all_trades_rows)
     _render_footer()
 

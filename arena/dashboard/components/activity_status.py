@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from arena.dashboard.config import AGENT_META
+from arena.dashboard.time_utils import format_timestamp_eastern
 
 
 def render_activity_status(activity_rows: list[dict]) -> None:
@@ -23,7 +24,7 @@ def _build_rows(activity_rows: list[dict]) -> list[dict]:
                 "Agent": AGENT_META[agent_name]["display_name"],
                 "Qualifying Trades": f"{int(row.get('qualifying_trades', 0))}/2",
                 "Flag Status": _flag_label(row.get("flag_status", "clear")),
-                "Flag Issued": row.get("flag_issued_at") or "",
+                "Flag Issued": format_timestamp_eastern(row.get("flag_issued_at"), fallback=str(row.get("flag_issued_at") or "")),
             }
         )
     return rows

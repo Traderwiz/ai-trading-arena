@@ -58,6 +58,14 @@ class DashboardSupabaseClient:
         week_start = (datetime.now(timezone.utc) - timedelta(days=datetime.now(timezone.utc).weekday())).date().isoformat()
         return self._read("activity_tracking", filters={"week_start": week_start}, order=("agent_name", False))
 
+    def get_recent_trade_rejections(self, limit=20):
+        return self._read(
+            "validation_log",
+            filters={"validation_type": "trade", "approved": False},
+            order=("timestamp", True),
+            limit=limit,
+        )
+
     def _read(self, table_name, filters=None, order=None, limit=None):
         query = self.client.table(table_name).select("*")
         for field, value in (filters or {}).items():

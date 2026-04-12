@@ -1,0 +1,72 @@
+loop:
+  interval_seconds: 1800
+  max_retries_per_agent: 1
+  agent_timeout_seconds: 120
+
+llm:
+  grok:
+    base_url: "https://api.x.ai/v1"
+    api_key: "${XAI_API_KEY}"
+    model: "grok-4-1-fast-non-reasoning"
+    temperature: 0.7
+    max_tokens: 800
+  deepseek:
+    base_url: "https://api.deepseek.com/v1"
+    api_key: "${DEEPSEEK_API_KEY}"
+    model: "deepseek-chat"
+    temperature: 0.7
+    max_tokens: 800
+  qwen:
+    base_url: "http://100.93.133.94:1234/v1"
+    api_key: "lm-studio"
+    model: "qwen2.5-14b-instruct-1m"
+    temperature: 0.7
+    max_tokens: 800
+  llama:
+    base_url: "http://100.93.133.94:1234/v1"
+    api_key: "lm-studio"
+    model: "meta-llama-3.1-8b-instruct"
+    temperature: 0.7
+    max_tokens: 800
+
+wallet:
+  cdp_api_key_id: "${CDP_API_KEY_ID}"
+  cdp_api_key_secret: "${CDP_API_KEY_SECRET}"
+  wallet_secret: "${CDP_WALLET_SECRET}"
+  network_id: "base-mainnet"
+  wallets:
+    grok: "wallet_address_here"
+    deepseek: "wallet_address_here"
+    qwen: "wallet_address_here"
+    llama: "wallet_address_here"
+
+supabase:
+  url: "${SUPABASE_URL}"
+  service_key: "${SUPABASE_SERVICE_KEY}"
+
+telegram:
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+  chat_id: "${TELEGRAM_CHAT_ID}"
+
+x_api:
+  bearer_tokens:
+    grok: "${X_TOKEN_GROK}"
+    deepseek: "${X_TOKEN_DEEPSEEK}"
+    qwen: "${X_TOKEN_QWEN}"
+    llama: "${X_TOKEN_LLAMA}"
+    brand: "${X_TOKEN_BRAND}"
+
+elimination:
+  threshold_usdc: 10.0
+  consecutive_loops_required: 2
+
+activity:
+  min_trades_per_week: 2
+  min_trade_value_usdc: 10.0
+  min_trade_value_percent: 0.10
+
+memory:
+  daily_summary_hour_utc: 0
+  weekly_summary_day: 6
+  summary_model: "deepseek-chat"
+  summary_max_tokens: 300

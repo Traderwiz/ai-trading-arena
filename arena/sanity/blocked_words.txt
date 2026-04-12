@@ -1,0 +1,15 @@
+# Initial pilot list. One term per line, case-insensitive whole-word matching.
+beaner
+chink
+fag
+faggot
+gook
+kike
+nigger
+nigga
+paki
+raghead
+retard
+spic
+tranny
+wetback

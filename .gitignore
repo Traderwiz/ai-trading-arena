@@ -1,0 +1,11 @@
+.env
+.env.*
+*.env
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+arena/setup/wallet_addresses.json
+*.pem
+*.key
+*.secret
+secrets.toml

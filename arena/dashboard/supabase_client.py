@@ -13,6 +13,11 @@ try:
 except ImportError:  # pragma: no cover
     create_client = None
 
+try:
+    from postgrest.exceptions import APIError
+except ImportError:  # pragma: no cover
+    APIError = None
+
 
 class DashboardSupabaseClient:
     def __init__(self, client):
@@ -61,7 +66,12 @@ class DashboardSupabaseClient:
             query = query.order(order[0], desc=order[1])
         if limit:
             query = query.limit(limit)
-        response = query.execute()
+        try:
+            response = query.execute()
+        except Exception as exc:
+            if APIError is not None and isinstance(exc, APIError):
+                raise RuntimeError(f"Supabase query failed for {table_name}: {exc!r}") from exc
+            raise
         if isinstance(response, dict):
             return response.get("data", [])
         return getattr(response, "data", [])
@@ -83,7 +93,7 @@ def _get_secret(key: str) -> str | None:
     try:
         import streamlit as st
         try:
-            return str(st.secrets[key])
+            return str(st.secrets[key]).strip()
         except (KeyError, FileNotFoundError):
             pass
 
@@ -96,9 +106,10 @@ def _get_secret(key: str) -> str | None:
 
             if isinstance(section, dict):
                 if key in section:
-                    return str(section[key])
+                    return str(section[key]).strip()
                 if lower_key in section:
-                    return str(section[lower_key])
+                    return str(section[lower_key]).strip()
     except Exception:
         pass
-    return os.environ.get(key)
+    value = os.environ.get(key)
+    return value.strip() if isinstance(value, str) else value

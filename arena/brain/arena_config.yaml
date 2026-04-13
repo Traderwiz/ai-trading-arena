@@ -3,6 +3,9 @@ loop:
   max_retries_per_agent: 1
   agent_timeout_seconds: 120
 
+competition:
+  starting_capital_usdc: 10.0
+
 llm:
   grok:
     base_url: "https://api.x.ai/v1"

@@ -21,11 +21,27 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertIn("trade\": null", prompt.lower())
         self.assertIn("concrete market number", prompt.lower())
         self.assertIn("concrete limit number", prompt.lower())
+        self.assertIn("best candidate trade", prompt.lower())
+        self.assertIn("no_trade_explanation", prompt)
+        self.assertIn("compare at least two candidate trades", prompt.lower())
 
     def test_comms_system_prompt_contains_personality_and_rules(self):
         prompt = build_comms_system_prompt("grok", TriggerBundle([]))
         self.assertIn("you are grok", prompt.lower())
         self.assertIn("respond with only a json object", prompt.lower())
+        self.assertIn("current loop context", prompt.lower())
+        self.assertIn("Pick exactly one rhetorical angle", prompt)
+        self.assertIn("Do not reuse the same rhetorical angle", prompt)
+
+    def test_deepseek_comms_system_prompt_contains_novelty_constraints(self):
+        prompt = build_comms_system_prompt("deepseek", TriggerBundle([]))
+        self.assertIn("fresh current-loop number", prompt)
+        self.assertIn("non-stationary market", prompt)
+        self.assertIn("volatility surface analysis", prompt)
+        self.assertIn("Sharpe ratio", prompt)
+        self.assertIn("statistical significance", prompt)
+        self.assertIn("Pick exactly one opening angle", prompt)
+        self.assertIn("Do not open with the pattern", prompt)
 
     def test_trade_user_prompt_contains_required_sections(self):
         wallet_state = WalletState(
@@ -63,6 +79,9 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertIn("LEADERBOARD", prompt)
         self.assertIn("MARKET SNAPSHOT", prompt)
         self.assertIn("PRECOMPUTED TRADE LIMITS", prompt)
+        self.assertIn("DECISION STANDARD", prompt)
+        self.assertIn("compare at least two candidates", prompt.lower())
+        self.assertIn("Identify the single best candidate trade", prompt)
         self.assertIn("safety buffer", prompt)
         self.assertIn("max_buy_quantity", prompt)
         self.assertIn("ETH-USD", prompt)
@@ -89,7 +108,9 @@ class PromptBuilderTests(unittest.TestCase):
             trade_context={"decision": {"side": "buy", "quantity": 1, "symbol": "ETH"}, "validation": {"approved": True}},
         )
         self.assertIn("GROUP CHAT", prompt)
+        self.assertIn("YOUR RECENT CHAT MESSAGES", prompt)
         self.assertIn("YOUR TRADE STATUS THIS LOOP", prompt)
+        self.assertIn("FRESH LOOP FACTS YOU CAN QUOTE", prompt)
         self.assertIn("Proposed trade", prompt)
 
     def test_comms_prompt_truncates_chat_for_token_budget(self):

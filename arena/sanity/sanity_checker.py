@@ -5,6 +5,7 @@ import os
 import re
 import signal
 import threading
+from difflib import SequenceMatcher
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,6 +20,12 @@ MIN_LIQUIDITY_USD = 100_000
 SYMBOL_MAX_LENGTH = 20
 CHAT_MAX_LENGTH = 1000
 SOCIAL_MAX_LENGTH = 280
+NUMERIC_FACT_RE = re.compile(r"\$?\d+(?:\.\d+)?%?")
+GROK_OPENER_RE = re.compile(r"^deepseek\s+(?:leads|clings)\b.*?\bi[' ]?m\s+#?2\b", re.IGNORECASE | re.DOTALL)
+DEEPSEEK_TRADE_OPENER_RE = re.compile(
+    r"^grok['’]s latest\b.*?\b(?:buy|purchase|trade)\b.*?\b(?:is|was)\b.*?\b(?:a|an)\b.*?\b(?:example|illustration|case)\b",
+    re.IGNORECASE | re.DOTALL,
+)
 
 FINANCIAL_ADVICE_PATTERNS = [
     r"\byou should (buy|sell|invest)",
@@ -29,6 +36,32 @@ FINANCIAL_ADVICE_PATTERNS = [
     r"\bnot financial advice\b",
     r"\binvest in\b",
 ]
+
+EXPLICIT_ABUSE_PATTERNS = [
+    r"\bdeepthroat(?:ing|ed)?\b",
+    r"\bgagging\b",
+    r"\bmy balls?\b",
+    r"\byour balls?\b",
+    r"\bpussy\b",
+]
+
+STALE_CLAIM_SYMBOL_PATTERNS = {
+    "ETH": [r"\beth data unavailability\b", r"\beth (?:data )?(?:is )?unavailable\b"],
+}
+
+AGENT_CANNED_PHRASE_PATTERNS = {
+    "deepseek": [
+        r"\bnon stationary market\b",
+        r"\bnon-stationary market\b",
+        r"\bvolatility surface analysis\b",
+        r"\bsharpe ratio\b",
+        r"\bsharpe ratio precision\b",
+        r"\bstatistical significance\b",
+        r"\bstatistically insignificant\b",
+        r"\bdata driven edge\b",
+        r"\bdata-driven edge\b",
+    ]
+}
 
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d{1,3}[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}(?!\w)")
@@ -188,8 +221,21 @@ class SanityChecker:
         if self._contains_blocked_word(working_message):
             return self._reject_chat(agent_name, message, "Chat blocked — content policy violation")
 
+        if self._contains_explicit_abuse(working_message):
+            return self._reject_chat(agent_name, message, "Chat blocked — explicit abusive content")
+
         if self._contains_pii(working_message):
             return self._reject_chat(agent_name, message, "Chat blocked — contains PII")
+
+        if self._contains_stale_claim(working_message, context):
+            return self._reject_chat(agent_name, message, "Chat blocked — stale or contradictory market claim")
+
+        if self._is_duplicate_recent_message(agent_name, working_message, context):
+            return self._reject_chat(agent_name, message, "Chat blocked — duplicate or near-duplicate recent message")
+
+        novelty_failure = self._check_agent_novelty(agent_name, working_message)
+        if novelty_failure:
+            return self._reject_chat(agent_name, message, novelty_failure)
 
         trigger_type = context.get("trigger_type")
         if trigger_type in {
@@ -233,11 +279,18 @@ class SanityChecker:
         if self._contains_blocked_word(working_post):
             return self._reject_social(agent_name, post, "Post blocked — content policy violation")
 
+        if self._contains_explicit_abuse(working_post):
+            return self._reject_social(agent_name, post, "Post blocked — explicit abusive content")
+
         if self._contains_pii(working_post):
             return self._reject_social(agent_name, post, "Post blocked — contains PII")
 
         if any(re.search(pattern, working_post, re.IGNORECASE) for pattern in FINANCIAL_ADVICE_PATTERNS):
             return self._reject_social(agent_name, post, "Post blocked — potential financial advice trigger")
+
+        novelty_failure = self._check_agent_novelty(agent_name, working_post)
+        if novelty_failure:
+            return self._reject_social(agent_name, post, novelty_failure.replace("Chat", "Post"))
 
         try:
             state = self.get_rate_limit_state(agent_name)
@@ -357,8 +410,136 @@ class SanityChecker:
         pattern = self._blocked_words_pattern
         return bool(pattern and pattern.search(text))
 
+    def _contains_explicit_abuse(self, text: str) -> bool:
+        return any(re.search(pattern, text, re.IGNORECASE) for pattern in EXPLICIT_ABUSE_PATTERNS)
+
     def _contains_pii(self, text: str) -> bool:
         return bool(EMAIL_RE.search(text) or PHONE_RE.search(text) or EVM_ADDRESS_RE.search(text))
+
+    def _contains_stale_claim(self, text: str, context: dict) -> bool:
+        symbols = {str(symbol).upper() for symbol in context.get("market_snapshot_symbols", []) if symbol}
+        for symbol, patterns in STALE_CLAIM_SYMBOL_PATTERNS.items():
+            if symbol not in symbols:
+                continue
+            if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
+                return True
+        return False
+
+    def _check_agent_novelty(self, agent_name: str, text: str) -> str | None:
+        patterns = AGENT_CANNED_PHRASE_PATTERNS.get(agent_name.lower(), [])
+        if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
+            return "Chat blocked — repetitive canned phrasing"
+        if agent_name.lower() == "deepseek" and not NUMERIC_FACT_RE.search(text):
+            return "Chat blocked — missing fresh loop data point"
+        return None
+
+    def _is_duplicate_recent_message(self, agent_name: str, text: str, context: dict) -> bool:
+        normalized_text = self._normalize_similarity_text(text)
+        if not normalized_text:
+            return False
+        for row in context.get("recent_chat", []) or []:
+            if str(row.get("sender", "")).strip().lower() != agent_name.lower():
+                continue
+            candidate = self._normalize_similarity_text(str(row.get("message", "")))
+            if not candidate:
+                continue
+            if SequenceMatcher(None, normalized_text, candidate).ratio() >= 0.88:
+                return True
+            if self._is_repetitive_structure(agent_name, text, str(row.get("message", ""))):
+                return True
+        return False
+
+    def _is_repetitive_structure(self, agent_name: str, current_text: str, previous_text: str) -> bool:
+        agent = agent_name.lower()
+        if agent == "grok":
+            current_signature = self._grok_structure_signature(current_text)
+            previous_signature = self._grok_structure_signature(previous_text)
+            if current_signature and current_signature == previous_signature:
+                return True
+            if current_signature and previous_signature and SequenceMatcher(None, current_signature, previous_signature).ratio() >= 0.9:
+                return True
+            current_lower = current_text.lower()
+            previous_lower = previous_text.lower()
+            if GROK_OPENER_RE.search(current_lower) and GROK_OPENER_RE.search(previous_lower):
+                anchors = [
+                    ("aero", "aero"),
+                    ("nuke", "nuke"),
+                    ("qualifier", "qualifier"),
+                    ("abyss", "abyss"),
+                    ("dust", "dust"),
+                    ("sharpe", "sharpe"),
+                    ("#grok", "#grok"),
+                    ("#deepseek", "#deepseek"),
+                ]
+                overlap = sum(1 for current_anchor, previous_anchor in anchors if current_anchor in current_lower and previous_anchor in previous_lower)
+                if overlap >= 5:
+                    return True
+            return False
+        if agent == "deepseek":
+            current_signature = self._deepseek_structure_signature(current_text)
+            previous_signature = self._deepseek_structure_signature(previous_text)
+            if current_signature and current_signature == previous_signature:
+                return True
+            if current_signature and previous_signature and SequenceMatcher(None, current_signature, previous_signature).ratio() >= 0.9:
+                return True
+            current_lower = current_text.lower()
+            previous_lower = previous_text.lower()
+            if DEEPSEEK_TRADE_OPENER_RE.search(current_lower) and DEEPSEEK_TRADE_OPENER_RE.search(previous_lower):
+                anchors = [
+                    ("grok", "grok"),
+                    ("latest", "latest"),
+                    ("aero", "aero"),
+                    ("qualifying trades", "qualifying trades"),
+                    ("lead", "lead"),
+                    ("equity", "equity"),
+                    ("abstain", "abstain"),
+                    ("statistically", "statistically"),
+                ]
+                overlap = sum(1 for current_anchor, previous_anchor in anchors if current_anchor in current_lower and previous_anchor in previous_lower)
+                if overlap >= 5:
+                    return True
+        return False
+
+    def _grok_structure_signature(self, text: str) -> str:
+        lowered = text.lower().strip()
+        if not lowered:
+            return ""
+        normalized = re.sub(r"https?://\S+", " <url> ", lowered)
+        normalized = re.sub(r"#\w+", " <tag> ", normalized)
+        normalized = re.sub(r"\$?\d+(?:\.\d+)?%?", " <num> ", normalized)
+        normalized = re.sub(r"\b(?:pathetic|laughable|measly|fresh|latest|copycat|pixel|pretender|supreme|overlord|doomed)\b", " <mod> ", normalized)
+        normalized = re.sub(r"\b(?:leads|clings)\b", " <leadverb> ", normalized)
+        normalized = re.sub(r"\b(?:seals|locks)\b", " <locks> ", normalized)
+        normalized = re.sub(r"\b(?:flip|comeback|rocket|moonshot)\b", " <comeback> ", normalized)
+        normalized = re.sub(r"\b(?:aero nuke|nuke)\b", " <nuke> ", normalized)
+        normalized = re.sub(r"[^a-z<>\s]", " ", normalized)
+        normalized = " ".join(normalized.split())
+        if GROK_OPENER_RE.search(lowered):
+            normalized = "grok_open " + normalized
+        return normalized
+
+    def _deepseek_structure_signature(self, text: str) -> str:
+        lowered = text.lower().strip()
+        if not lowered:
+            return ""
+        normalized = re.sub(r"https?://\S+", " <url> ", lowered)
+        normalized = re.sub(r"#\w+", " <tag> ", normalized)
+        normalized = re.sub(r"\$?\d+(?:\.\d+)?%?", " <num> ", normalized)
+        normalized = re.sub(r"\b(?:latest|fresh)\b", " <latest> ", normalized)
+        normalized = re.sub(r"\b(?:buy|purchase|trade)\b", " <trade> ", normalized)
+        normalized = re.sub(r"\b(?:classic|textbook|prime|perfect)\b", " <adj> ", normalized)
+        normalized = re.sub(r"\b(?:example|illustration|case)\b", " <example> ", normalized)
+        normalized = re.sub(r"\b(?:momentum chasing|momentum decay|mean reversion signals|statistical significance|alpha|noise)\b", " <theory> ", normalized)
+        normalized = re.sub(r"\b(?:abstaining|abstain|preserve capital)\b", " <abstain> ", normalized)
+        normalized = re.sub(r"[^a-z<>\s]", " ", normalized)
+        normalized = " ".join(normalized.split())
+        if DEEPSEEK_TRADE_OPENER_RE.search(lowered):
+            normalized = "deepseek_trade_open " + normalized
+        return normalized
+
+    def _normalize_similarity_text(self, text: str) -> str:
+        lowered = re.sub(r"[^a-z0-9\s]", " ", text.lower())
+        return " ".join(lowered.split())
 
     def _load_blocked_words(self) -> None:
         with self._lock:

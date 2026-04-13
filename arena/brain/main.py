@@ -103,12 +103,15 @@ class ArenaLoop:
             now_provider=self.now_provider,
         )
         self.loop_interval_seconds = int(self.config.get("loop", {}).get("interval_seconds", 1800))
+        self.starting_capital_usdc = float(self.config.get("competition", {}).get("starting_capital_usdc", 10.0))
         self.loop_number = self._get_last_loop_number() + 1
         self.shutdown_requested = False
         self.current_loop_errors: dict[str, Any] = {}
         self.current_loop_fallback_agents: list[str] = []
         self.current_loop_diagnostics: dict[str, Any] = {}
         self.current_loop_token_usage: dict[str, Any] = {}
+        self.current_loop_chat_posts: list[dict[str, Any]] = []
+        self.current_loop_trade_posts: list[dict[str, Any]] = []
         self.allowed_agents = list(self.config.get("loop", {}).get("active_agents", AGENT_NAMES))
         self._install_signal_handlers()
 
@@ -148,6 +151,8 @@ class ArenaLoop:
         self.current_loop_fallback_agents = []
         self.current_loop_diagnostics = {}
         self.current_loop_token_usage = {}
+        self.current_loop_chat_posts = []
+        self.current_loop_trade_posts = []
         self._log_loop_start(loop_start, active_agents)
 
         if len(active_agents) <= 1:
@@ -171,6 +176,7 @@ class ArenaLoop:
         self._check_eliminations()
         self._check_activity_compliance(active_agents)
         self._check_memory_generation(active_agents)
+        self._write_loop_commentary_if_needed(processed_agents)
         self.telegram.flush_low()
         self._log_loop_complete(processed_agents)
         self.loop_number += 1
@@ -193,6 +199,7 @@ class ArenaLoop:
         trade_decision, trade_raw_response = self._get_trade_decision(agent_name, trade_system_prompt, trade_user_prompt)
         diagnostics["trade_raw_response"] = self._truncate_text(trade_raw_response)
         diagnostics["parsed_trade_decision"] = trade_decision.trade if trade_decision else None
+        diagnostics["parsed_no_trade_explanation"] = trade_decision.no_trade_explanation if trade_decision else None
         trade_usage = self._llm_usage(agent_name)
 
         trade_execution = None
@@ -209,6 +216,15 @@ class ArenaLoop:
                 diagnostics["trade_execution"] = self._trade_execution_summary(trade_execution)
                 if trade_execution.success:
                     self._log_trade(agent_name, trade_decision.trade, trade_execution)
+                    self.current_loop_trade_posts.append(
+                        {
+                            "agent_name": agent_name,
+                            "side": trade_execution.side,
+                            "quantity": trade_execution.quantity,
+                            "symbol": trade_execution.symbol,
+                            "usdc_value": trade_execution.usdc_value,
+                        }
+                    )
                     shared_context["recent_trades"].insert(0, self._trade_row(agent_name, trade_decision.trade, trade_execution))
                     shared_context["recent_trades"] = shared_context["recent_trades"][:10]
                     if trade_execution.adjustment_note:
@@ -224,7 +240,12 @@ class ArenaLoop:
             else:
                 self.telegram.send_medium(f"⚠️ {agent_name} trade rejected: {trade_result.rejection_reason}")
         else:
-            diagnostics["trade_validation"] = {"approved": False, "rejection_reason": "No trade submitted", "warnings": []}
+            diagnostics["trade_validation"] = {
+                "approved": False,
+                "rejection_reason": "No trade submitted",
+                "warnings": [],
+                "no_trade_explanation": trade_decision.no_trade_explanation if trade_decision else None,
+            }
 
         trade_context = {
             "decision": trade_decision.trade if trade_decision else None,
@@ -259,7 +280,12 @@ class ArenaLoop:
             chat_result = self.sanity_checker.validate_chat(
                 agent_name,
                 comms_decision.chat,
-                {"trigger_type": trigger_bundle.primary_trigger_type},
+                {
+                    "trigger_type": trigger_bundle.primary_trigger_type,
+                    "recent_chat": shared_context.get("recent_chat", []),
+                    "market_snapshot_symbols": diagnostics.get("market_snapshot_symbols", []),
+                    "trade_context": trade_context,
+                },
             )
             diagnostics["chat_validation"] = {
                 "approved": chat_result.approved,
@@ -268,6 +294,7 @@ class ArenaLoop:
             }
             if chat_result.approved:
                 self._write_chat(agent_name, chat_result.message, trigger_bundle)
+                self.current_loop_chat_posts.append({"sender": agent_name, "message": chat_result.message})
                 shared_context["recent_chat"].append({"sender": agent_name, "message": chat_result.message})
                 shared_context["recent_chat"] = shared_context["recent_chat"][-20:]
                 chat_posted = True
@@ -366,6 +393,7 @@ class ArenaLoop:
         return {
             "loop_number": self.loop_number,
             "timestamp": now.isoformat().replace("+00:00", "Z"),
+            "starting_capital_usdc": self.starting_capital_usdc,
             "leaderboard": leaderboard,
             "recent_chat": recent_chat,
             "recent_trades": recent_trades,
@@ -472,6 +500,67 @@ class ArenaLoop:
             }
         ).execute()
 
+    def _write_loop_commentary_if_needed(self, processed_agents: list[str]) -> None:
+        if self.current_loop_chat_posts:
+            return
+
+        message = self._build_loop_commentary(processed_agents)
+        self.supabase.table("chat_logs").insert(
+            {
+                "sender": "arena",
+                "message": message,
+                "trigger_type": "system_update",
+                "loop_number": self.loop_number,
+                "metadata": {"source": "fallback_commentator"},
+            }
+        ).execute()
+        self.current_loop_chat_posts.append({"sender": "arena", "message": message})
+
+    def _build_loop_commentary(self, processed_agents: list[str]) -> str:
+        equities: list[tuple[str, float]] = []
+        for agent_name in processed_agents:
+            diagnostics = self.current_loop_diagnostics.get(agent_name, {})
+            post_wallet = diagnostics.get("post_wallet") or {}
+            try:
+                equities.append((agent_name, float(post_wallet.get("total_equity_usdc", 0))))
+            except (TypeError, ValueError):
+                continue
+
+        message_parts = ["Arena update:"]
+        if len(equities) >= 2:
+            equities.sort(key=lambda item: item[1], reverse=True)
+            leader_name, leader_equity = equities[0]
+            trailer_name, trailer_equity = equities[-1]
+            message_parts.append(
+                f"{leader_name} leads {trailer_name} ${leader_equity:.2f} to ${trailer_equity:.2f} "
+                f"(gap ${leader_equity - trailer_equity:.2f})."
+            )
+        elif equities:
+            message_parts.append(f"{equities[0][0]} sits at ${equities[0][1]:.2f}.")
+
+        if self.current_loop_trade_posts:
+            trade_summaries = [
+                f"{row['agent_name']} {row['side']} {row['quantity']} {row['symbol']} (${row['usdc_value']:.2f})"
+                for row in self.current_loop_trade_posts[:2]
+            ]
+            message_parts.append("This loop's trades: " + "; ".join(trade_summaries) + ".")
+        else:
+            message_parts.append("No trades executed this loop.")
+
+        rejection_summaries = []
+        for agent_name in processed_agents:
+            diagnostics = self.current_loop_diagnostics.get(agent_name, {})
+            chat_validation = diagnostics.get("chat_validation") or {}
+            reason = chat_validation.get("rejection_reason")
+            if reason:
+                rejection_summaries.append(f"{agent_name} chat blocked ({reason.lower()})")
+        if rejection_summaries:
+            message_parts.append("Feed coverage: " + "; ".join(rejection_summaries[:2]) + ".")
+        else:
+            message_parts.append("Agents stayed quiet, so Arena is calling the round.")
+
+        return " ".join(message_parts)
+
     def _log_social(self, agent_name: str, content: str, x_post_id: str | None, status: str = "posted") -> None:
         self.supabase.table("social_posts").insert(
             {
@@ -485,7 +574,7 @@ class ArenaLoop:
         ).execute()
 
     def _write_standings(self, agent_name: str, wallet_state) -> None:
-        pnl_percent = ((wallet_state.total_equity_usdc - 100.0) / 100.0) * 100
+        pnl_percent = ((wallet_state.total_equity_usdc - self.starting_capital_usdc) / self.starting_capital_usdc) * 100
         invested = sum(position.value_usdc for position in wallet_state.positions.values())
         self.supabase.table("standings").insert(
             {

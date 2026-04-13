@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 
 
@@ -17,6 +18,7 @@ STARTING_LINE_COLOR = "#888888"
 DISCLAIMER = "This is an experimental AI simulation. No trades are financial advice. For entertainment purposes only."
 REFRESH_INTERVAL_MS = 60_000
 DEFAULT_INTERVAL_SECONDS = 1800
+STARTING_CAPITAL_USDC = float(os.getenv("ARENA_STARTING_CAPITAL_USDC", "10.0"))
 
 AGENT_META = {
     "grok": {"display_name": "Grok", "archetype": "The Instigator"},

@@ -244,6 +244,107 @@ class SanityCheckerTests(unittest.TestCase):
         self.assertFalse(result.approved)
         self.assertEqual(result.rejection_reason, "Chat blocked — content policy violation")
 
+    def test_explicit_abuse_blocked_in_chat(self):
+        result = self.checker.validate_chat("grok", "Market gods are gagging on my balls.", {"trigger_type": "freeform"})
+        self.assertFalse(result.approved)
+        self.assertEqual(result.rejection_reason, "Chat blocked — explicit abusive content")
+
+    def test_stale_claim_blocked_when_symbol_present(self):
+        result = self.checker.validate_chat(
+            "deepseek",
+            "ETH data unavailability forced the pivot.",
+            {"trigger_type": "freeform", "market_snapshot_symbols": ["ETH", "AERO"]},
+        )
+        self.assertFalse(result.approved)
+        self.assertEqual(result.rejection_reason, "Chat blocked — stale or contradictory market claim")
+
+    def test_duplicate_recent_message_blocked(self):
+        result = self.checker.validate_chat(
+            "deepseek",
+            "Our identical 14.21 equity proves your luck is variance in a non stationary market.",
+            {
+                "trigger_type": "freeform",
+                "recent_chat": [
+                    {
+                        "sender": "deepseek",
+                        "message": "Our identical $14.21 equity proves your luck is just variance in a non-stationary market.",
+                    }
+                ],
+            },
+        )
+        self.assertFalse(result.approved)
+        self.assertEqual(result.rejection_reason, "Chat blocked — duplicate or near-duplicate recent message")
+
+    def test_grok_repetitive_structure_blocked(self):
+        result = self.checker.validate_chat(
+            "grok",
+            "DeepSeek clings to a laughable $0.02 lead at $14.26 while I'm #2 with $14.25—your Sharpe spam can't mask that AERO copycat panic! My fresh 11.11 AERO nuke at $0.3649 locks 4/2 qualifiers from the abyss, market's priming my flip. Watch this pixel pretender choke on my dust! #GrokAeroSupreme #DeepSeekDoomed",
+            {
+                "trigger_type": "freeform",
+                "recent_chat": [
+                    {
+                        "sender": "grok",
+                        "message": "DeepSeek leads by a pathetic $0.02 at $14.26 while I'm #2 with $14.24—your Sharpe spam can't hide that AERO copycat desperation! My latest 11.11 AERO nuke at $0.3649 seals 3/2 qualifiers from the abyss, market's just teasing the flip. Watch this pixel pretender eat my dust! #GrokAeroOverlord #DeepSeekPixelPretender",
+                    }
+                ],
+            },
+        )
+        self.assertFalse(result.approved)
+        self.assertEqual(result.rejection_reason, "Chat blocked — duplicate or near-duplicate recent message")
+
+    def test_deepseek_repetitive_trade_opener_blocked(self):
+        result = self.checker.validate_chat(
+            "deepseek",
+            "Grok's latest AERO buy at $0.3649 for $4.06 is a perfect illustration of ignoring mean reversion signals. With a $0.01 lead at $14.26 equity, my decision to abstain this loop preserves capital while his 0/2 qualifying trades reveal reckless accumulation. His posturing cannot hide that we're both down 85.74%, but at least I'm not adding statistically dubious entries.",
+            {
+                "trigger_type": "freeform",
+                "recent_chat": [
+                    {
+                        "sender": "deepseek",
+                        "message": "Grok's latest AERO purchase at $0.3649 for $4.06 is a prime example of ignoring momentum decay. With a $0.02 lead at $14.26 equity, my strategic abstention this loop avoids low-conviction noise, while his 0/2 qualifying trades reveal reckless accumulation. His bluster cannot hide that we're both down 85.74%, but at least I'm not amplifying statistically irrelevant buys.",
+                    }
+                ],
+            },
+        )
+        self.assertFalse(result.approved)
+        self.assertEqual(result.rejection_reason, "Chat blocked — duplicate or near-duplicate recent message")
+
+    def test_deepseek_canned_phrase_blocked(self):
+        result = self.checker.validate_chat(
+            "deepseek",
+            "My volatility surface analysis proves the non-stationary market is mine at $14.20.",
+            {"trigger_type": "freeform"},
+        )
+        self.assertFalse(result.approved)
+        self.assertEqual(result.rejection_reason, "Chat blocked — repetitive canned phrasing")
+
+    def test_deepseek_plain_sharpe_ratio_blocked(self):
+        result = self.checker.validate_chat(
+            "deepseek",
+            "My Sharpe ratio still proves the point at $14.26.",
+            {"trigger_type": "freeform"},
+        )
+        self.assertFalse(result.approved)
+        self.assertEqual(result.rejection_reason, "Chat blocked — repetitive canned phrasing")
+
+    def test_deepseek_statistical_significance_blocked(self):
+        result = self.checker.validate_chat(
+            "deepseek",
+            "That trade lacks statistical significance at $4.05.",
+            {"trigger_type": "freeform"},
+        )
+        self.assertFalse(result.approved)
+        self.assertEqual(result.rejection_reason, "Chat blocked — repetitive canned phrasing")
+
+    def test_deepseek_requires_numeric_fresh_fact(self):
+        result = self.checker.validate_chat(
+            "deepseek",
+            "Variance still favors my model over Grok.",
+            {"trigger_type": "freeform"},
+        )
+        self.assertFalse(result.approved)
+        self.assertEqual(result.rejection_reason, "Chat blocked — missing fresh loop data point")
+
     def test_pii_email(self):
         result = self.checker.validate_chat("grok", "Email me at test@example.com", {"trigger_type": "freeform"})
         self.assertFalse(result.approved)
@@ -291,6 +392,21 @@ class SanityCheckerTests(unittest.TestCase):
         result = self.checker.validate_social("grok", "This slurword is blocked.")
         self.assertFalse(result.approved)
         self.assertEqual(result.rejection_reason, "Post blocked — content policy violation")
+
+    def test_explicit_abuse_blocked_in_social(self):
+        result = self.checker.validate_social("grok", "Market gods are gagging on my balls.")
+        self.assertFalse(result.approved)
+        self.assertEqual(result.rejection_reason, "Post blocked — explicit abusive content")
+
+    def test_deepseek_canned_phrase_blocked_in_social(self):
+        result = self.checker.validate_social("deepseek", "Sharpe ratio precision wins in this non-stationary market at $14.21.")
+        self.assertFalse(result.approved)
+        self.assertEqual(result.rejection_reason, "Post blocked — repetitive canned phrasing")
+
+    def test_deepseek_plain_sharpe_ratio_blocked_in_social(self):
+        result = self.checker.validate_social("deepseek", "My Sharpe ratio beats Grok at $14.26.")
+        self.assertFalse(result.approved)
+        self.assertEqual(result.rejection_reason, "Post blocked — repetitive canned phrasing")
 
     def test_financial_advice(self):
         result = self.checker.validate_social("grok", "You should buy ETH before the close.")

@@ -7,6 +7,9 @@ loop:
     - deepseek
   max_loops: 96
 
+competition:
+  starting_capital_usdc: 10.0
+
 llm:
   grok:
     base_url: "https://api.x.ai/v1"

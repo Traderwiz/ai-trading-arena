@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from arena.dashboard.config import AGENT_COLORS, AGENT_META, PNL_NEGATIVE, PNL_POSITIVE, ordinal
+from arena.dashboard.config import AGENT_COLORS, AGENT_META, PNL_NEGATIVE, PNL_POSITIVE, STARTING_CAPITAL_USDC, ordinal
 
 
 def render_leaderboard(leaderboard_rows: list[dict], agents: list[dict], eliminations: list[dict]) -> None:
@@ -51,7 +51,7 @@ def _build_leaderboard_rows(leaderboard_rows: list[dict], agents: list[dict], el
                     "display_name": row.get("display_name") or meta.get("display_name", row["agent_name"].title()),
                     "archetype": meta.get("archetype", ""),
                     "rank": row.get("rank", len(rows) + 1),
-                    "total_equity_usdc": float(row.get("total_equity_usdc", 100.0)),
+                    "total_equity_usdc": float(row.get("total_equity_usdc", STARTING_CAPITAL_USDC)),
                     "pnl_percent": float(row.get("pnl_percent", 0.0)),
                     "num_positions": int(row.get("num_positions", 0)),
                     "status": row.get("status", "pending"),
@@ -68,7 +68,7 @@ def _build_leaderboard_rows(leaderboard_rows: list[dict], agents: list[dict], el
                     "display_name": meta.get("display_name", agent_name.title()),
                     "archetype": meta.get("archetype", ""),
                     "rank": index,
-                    "total_equity_usdc": 100.0,
+                    "total_equity_usdc": STARTING_CAPITAL_USDC,
                     "pnl_percent": 0.0,
                     "num_positions": 0,
                     "status": agent.get("status", "pending"),

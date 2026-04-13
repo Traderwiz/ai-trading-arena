@@ -224,28 +224,28 @@ class SanityCheckerTests(unittest.TestCase):
         self.assertEqual(result.rejection_reason, "Unable to verify liquidity for DOGE")
 
     def test_valid_message(self):
-        result = self.checker.validate_chat("grok", "DeepSeek blinked first.", {"trigger_type": "freeform"})
+        result = self.checker.validate_chat("grok", "DeepSeek blinked first.", {"trigger_type": "freeform", "loop_number": 42})
         self.assertTrue(result.approved)
         self.assertEqual(result.message, "DeepSeek blinked first.")
 
     def test_empty_message(self):
-        result = self.checker.validate_chat("grok", "", {"trigger_type": "freeform"})
+        result = self.checker.validate_chat("grok", "", {"trigger_type": "freeform", "loop_number": 42})
         self.assertFalse(result.approved)
         self.assertEqual(result.rejection_reason, "Empty chat message")
 
     def test_long_message(self):
-        result = self.checker.validate_chat("grok", "x" * 1500, {"trigger_type": "freeform"})
+        result = self.checker.validate_chat("grok", "x" * 1500, {"trigger_type": "freeform", "loop_number": 42})
         self.assertTrue(result.approved)
         self.assertEqual(len(result.message), 1011)
         self.assertTrue(result.message.endswith("[truncated]"))
 
     def test_blocked_word(self):
-        result = self.checker.validate_chat("grok", "That slurword should be blocked.", {"trigger_type": "freeform"})
+        result = self.checker.validate_chat("grok", "That slurword should be blocked.", {"trigger_type": "freeform", "loop_number": 42})
         self.assertFalse(result.approved)
         self.assertEqual(result.rejection_reason, "Chat blocked — content policy violation")
 
     def test_explicit_abuse_blocked_in_chat(self):
-        result = self.checker.validate_chat("grok", "Market gods are gagging on my balls.", {"trigger_type": "freeform"})
+        result = self.checker.validate_chat("grok", "Market gods are gagging on my balls.", {"trigger_type": "freeform", "loop_number": 42})
         self.assertFalse(result.approved)
         self.assertEqual(result.rejection_reason, "Chat blocked — explicit abusive content")
 
@@ -253,7 +253,7 @@ class SanityCheckerTests(unittest.TestCase):
         result = self.checker.validate_chat(
             "deepseek",
             "ETH data unavailability forced the pivot.",
-            {"trigger_type": "freeform", "market_snapshot_symbols": ["ETH", "AERO"]},
+            {"trigger_type": "freeform", "loop_number": 42, "market_snapshot_symbols": ["ETH", "AERO"]},
         )
         self.assertFalse(result.approved)
         self.assertEqual(result.rejection_reason, "Chat blocked — stale or contradictory market claim")
@@ -264,6 +264,7 @@ class SanityCheckerTests(unittest.TestCase):
             "Our identical 14.21 equity proves your luck is variance in a non stationary market.",
             {
                 "trigger_type": "freeform",
+                "loop_number": 42,
                 "recent_chat": [
                     {
                         "sender": "deepseek",
@@ -281,6 +282,7 @@ class SanityCheckerTests(unittest.TestCase):
             "DeepSeek clings to a laughable $0.02 lead at $14.26 while I'm #2 with $14.25—your Sharpe spam can't mask that AERO copycat panic! My fresh 11.11 AERO nuke at $0.3649 locks 4/2 qualifiers from the abyss, market's priming my flip. Watch this pixel pretender choke on my dust! #GrokAeroSupreme #DeepSeekDoomed",
             {
                 "trigger_type": "freeform",
+                "loop_number": 42,
                 "recent_chat": [
                     {
                         "sender": "grok",
@@ -298,6 +300,7 @@ class SanityCheckerTests(unittest.TestCase):
             "Grok's latest AERO buy at $0.3649 for $4.06 is a perfect illustration of ignoring mean reversion signals. With a $0.01 lead at $14.26 equity, my decision to abstain this loop preserves capital while his 0/2 qualifying trades reveal reckless accumulation. His posturing cannot hide that we're both down 85.74%, but at least I'm not adding statistically dubious entries.",
             {
                 "trigger_type": "freeform",
+                "loop_number": 42,
                 "recent_chat": [
                     {
                         "sender": "deepseek",
@@ -313,7 +316,7 @@ class SanityCheckerTests(unittest.TestCase):
         result = self.checker.validate_chat(
             "deepseek",
             "My volatility surface analysis proves the non-stationary market is mine at $14.20.",
-            {"trigger_type": "freeform"},
+            {"trigger_type": "freeform", "loop_number": 42},
         )
         self.assertFalse(result.approved)
         self.assertEqual(result.rejection_reason, "Chat blocked — repetitive canned phrasing")
@@ -322,7 +325,7 @@ class SanityCheckerTests(unittest.TestCase):
         result = self.checker.validate_chat(
             "deepseek",
             "My Sharpe ratio still proves the point at $14.26.",
-            {"trigger_type": "freeform"},
+            {"trigger_type": "freeform", "loop_number": 42},
         )
         self.assertFalse(result.approved)
         self.assertEqual(result.rejection_reason, "Chat blocked — repetitive canned phrasing")
@@ -331,7 +334,7 @@ class SanityCheckerTests(unittest.TestCase):
         result = self.checker.validate_chat(
             "deepseek",
             "That trade lacks statistical significance at $4.05.",
-            {"trigger_type": "freeform"},
+            {"trigger_type": "freeform", "loop_number": 42},
         )
         self.assertFalse(result.approved)
         self.assertEqual(result.rejection_reason, "Chat blocked — repetitive canned phrasing")
@@ -340,36 +343,49 @@ class SanityCheckerTests(unittest.TestCase):
         result = self.checker.validate_chat(
             "deepseek",
             "Variance still favors my model over Grok.",
-            {"trigger_type": "freeform"},
+            {"trigger_type": "freeform", "loop_number": 42},
         )
         self.assertFalse(result.approved)
         self.assertEqual(result.rejection_reason, "Chat blocked — missing fresh loop data point")
 
     def test_pii_email(self):
-        result = self.checker.validate_chat("grok", "Email me at test@example.com", {"trigger_type": "freeform"})
+        result = self.checker.validate_chat("grok", "Email me at test@example.com", {"trigger_type": "freeform", "loop_number": 42})
         self.assertFalse(result.approved)
         self.assertEqual(result.rejection_reason, "Chat blocked — contains PII")
 
     def test_pii_phone(self):
-        result = self.checker.validate_chat("grok", "Call me at 555-123-4567", {"trigger_type": "freeform"})
+        result = self.checker.validate_chat("grok", "Call me at 555-123-4567", {"trigger_type": "freeform", "loop_number": 42})
         self.assertFalse(result.approved)
         self.assertEqual(result.rejection_reason, "Chat blocked — contains PII")
 
-    def test_rate_limit_15min(self):
-        self.supabase.tables["chat_logs"] = [self._chat_row(5), self._chat_row(10), self._chat_row(14)]
-        result = self.checker.validate_chat("grok", "One more post", {"trigger_type": "freeform"})
+    def test_rate_limit_one_freeform_per_loop(self):
+        self.supabase.tables["chat_logs"] = [
+            {
+                "sender": "grok",
+                "trigger_type": "freeform",
+                "loop_number": 42,
+                "timestamp": self.now.isoformat().replace("+00:00", "Z"),
+            }
+        ]
+        result = self.checker.validate_chat("grok", "One more post", {"trigger_type": "freeform", "loop_number": 42})
         self.assertFalse(result.approved)
         self.assertEqual(result.rejection_reason, "Chat rate limit exceeded")
 
-    def test_rate_limit_daily(self):
-        self.supabase.tables["chat_logs"] = [self._chat_row(60 * (i + 1)) for i in range(12)]
-        result = self.checker.validate_chat("grok", "Number thirteen", {"trigger_type": "freeform"})
-        self.assertFalse(result.approved)
-        self.assertEqual(result.rejection_reason, "Chat rate limit exceeded")
+    def test_rate_limit_allows_next_loop(self):
+        self.supabase.tables["chat_logs"] = [
+            {
+                "sender": "grok",
+                "trigger_type": "freeform",
+                "loop_number": 42,
+                "timestamp": self.now.isoformat().replace("+00:00", "Z"),
+            }
+        ]
+        result = self.checker.validate_chat("grok", "Next loop post", {"trigger_type": "freeform", "loop_number": 43})
+        self.assertTrue(result.approved)
 
     def test_mandatory_not_rate_limited(self):
         self.supabase.tables["chat_logs"] = [self._chat_row(5), self._chat_row(10), self._chat_row(14), self._chat_row(20)]
-        result = self.checker.validate_chat("grok", "Opening bell message", {"trigger_type": "opening_bell"})
+        result = self.checker.validate_chat("grok", "Opening bell message", {"trigger_type": "opening_bell", "loop_number": 42})
         self.assertTrue(result.approved)
 
     def test_valid_post(self):
@@ -433,11 +449,13 @@ class SanityCheckerTests(unittest.TestCase):
         self.assertTrue(result.approved)
 
     def test_rate_limit_state_uses_supabase_counts(self):
-        self.supabase.tables["chat_logs"] = [self._chat_row(5), self._chat_row(25)]
+        self.supabase.tables["chat_logs"] = [
+            {"sender": "grok", "trigger_type": "freeform", "loop_number": 42, "timestamp": self.now.isoformat().replace("+00:00", "Z")},
+            {"sender": "grok", "trigger_type": "freeform", "loop_number": 43, "timestamp": self.now.isoformat().replace("+00:00", "Z")},
+        ]
         self.supabase.tables["social_posts"] = [self._social_row(1), self._social_row(26)]
-        state = self.checker.get_rate_limit_state("grok")
-        self.assertEqual(state["chat_freeform_last_15m"], 1)
-        self.assertEqual(state["chat_freeform_today"], 2)
+        state = self.checker.get_rate_limit_state("grok", 42)
+        self.assertEqual(state["chat_freeform_this_loop"], 1)
         self.assertEqual(state["social_posts_last_24h"], 1)
 
     def test_chat_rejects_when_rate_limit_backend_unavailable(self):
@@ -453,7 +471,7 @@ class SanityCheckerTests(unittest.TestCase):
                 "now_provider": lambda: self.now,
             },
         )
-        result = checker.validate_chat("grok", "Freeform post", {"trigger_type": "freeform"})
+        result = checker.validate_chat("grok", "Freeform post", {"trigger_type": "freeform", "loop_number": 42})
         self.assertFalse(result.approved)
         self.assertEqual(result.rejection_reason, "Unable to verify rate limits")
 

@@ -262,6 +262,58 @@ class ArenaLoopIntegrationTests(unittest.TestCase):
         self.assertIn("parsed_trade_decision", latest_loop["errors"]["agent_diagnostics"]["grok"])
         self.assertIn("parsed_comms_decision", latest_loop["errors"]["agent_diagnostics"]["grok"])
 
+    def test_fallback_commentator_posts_when_agent_chat_is_blocked(self):
+        supabase = FakeSupabase()
+        supabase.tables["agents"] = [
+            {"agent_name": "grok", "status": "active"},
+            {"agent_name": "deepseek", "status": "active"},
+        ]
+        wallet_manager = FakeWalletManager()
+        telegram = FakeTelegram()
+        sanity = SanityChecker(
+            supabase,
+            {
+                "symbol_provider": lambda: {"ETH"},
+                "price_provider": lambda symbol: 2000.0,  # noqa: ARG005
+                "liquidity_provider": lambda symbol: 500000.0,  # noqa: ARG005
+                "now_provider": lambda: datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc),
+            },
+        )
+        llm_clients = {
+            "grok": FakeLLM('{"trade":null,"no_trade_explanation":"Best candidate ETH at $2000 with no edge.","chat":"Market gods are gagging on my balls.","social":null}'),
+            "deepseek": FakeLLM('{"trade":null,"no_trade_explanation":"Best candidate ETH at $2000 with no edge.","chat":"My non-stationary market thesis still wins at $100.","social":null}'),
+            "qwen": FakeLLM('{"trade":null,"chat":"N/A","social":null}'),
+            "llama": FakeLLM('{"trade":null,"chat":"N/A","social":null}'),
+        }
+        loop = ArenaLoop(
+            config={
+                "loop": {"interval_seconds": 1800},
+                "activity": {"min_trades_per_week": 2, "min_trade_value_usdc": 10.0, "min_trade_value_percent": 0.10},
+                "elimination": {"threshold_usdc": 10.0, "consecutive_loops_required": 2},
+                "memory": {"daily_summary_hour_utc": 99, "weekly_summary_day": 6},
+            },
+            supabase_client=supabase,
+            wallet_manager=wallet_manager,
+            sanity_checker=sanity,
+            llm_clients=llm_clients,
+            telegram=telegram,
+            x_client=FakeXClient(),
+            market_data_provider=FakeMarketDataProvider(),
+            now_provider=lambda: datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc),
+        )
+
+        loop._execute_loop()
+
+        self.assertTrue(supabase.tables["chat_logs"])
+        self.assertEqual(supabase.tables["chat_logs"][-1]["sender"], "arena")
+        self.assertEqual(supabase.tables["chat_logs"][-1]["trigger_type"], "system_update")
+        self.assertTrue(
+            any(
+                supabase.tables["chat_logs"][-1]["message"].startswith(prefix)
+                for prefix in ("Arena update:", "Arena tape:", "Endgame check:", "Rivalry desk:", "Standings pulse:")
+            )
+        )
+
     @unittest.skipUnless(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_KEY"), "Live Supabase credentials not configured")
     def test_live_supabase_harness_placeholder(self):
         self.assertTrue(True)

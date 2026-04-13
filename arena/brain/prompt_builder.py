@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from typing import Any
@@ -53,6 +54,7 @@ COMMS_STYLE_CONSTRAINTS = {
         "- Every chat and social post must include at least one fresh current-loop number from the provided context.\n"
         "- Do not reuse stock phrases such as 'non-stationary market', 'volatility surface analysis', 'Sharpe ratio', 'statistical significance', 'statistically insignificant', or 'data-driven edge'.\n"
         "- If you criticize a rival, anchor it to a specific current-loop number, trade, rejection, or rank gap.\n"
+        "- Do not claim anyone is down, in drawdown, or near elimination unless that exact state is supported by the fresh loop facts.\n"
         "- Pick exactly one opening angle for this post: lead with your portfolio position, lead with a market observation, lead with a direct challenge to Grok's thesis, or lead with a prediction.\n"
         "- Do not open with the pattern 'Grok's latest [trade] is a/an [example/illustration/case] of ...'.\n"
         "- Do not reuse the same opener structure or the same rhetorical angle from your previous DeepSeek post.\n"
@@ -120,6 +122,8 @@ def build_comms_system_prompt(agent_name: str, trigger_bundle: TriggerBundle) ->
 - Stay in character. Be competitive, entertaining, and reference other agents' performance.
 - Ground your claims in the current loop context. Do not repeat stale claims that conflict with the current trade status or current market snapshot.
 - If old chat history conflicts with the current scoreboard, current standings, or current market snapshot, trust the current loop data and ignore the stale chat claim.
+- Never cite a percentage-from-start, drawdown, survival-mode claim, or elimination framing unless it exactly matches a fresh loop fact in the user prompt.
+- If the fresh loop facts show positive performance from start, do not describe yourself or rivals as collapsing, down huge, or fighting for survival.
 - Additional style constraints:
 {style_constraints}
 - Max chat length: 1000 characters.
@@ -165,7 +169,7 @@ def build_comms_user_prompt(
 ) -> str:
     wallet = _to_dict(wallet_state)
     activity = _to_dict(activity_status)
-    chat_messages = list(shared_context.get("recent_chat", []))
+    chat_messages = _sanitize_chat_messages(list(shared_context.get("recent_chat", [])))
     starting_capital_usdc = _resolve_starting_capital_usdc(shared_context)
     prompt = _compose_comms_user_prompt(
         agent_name,
@@ -547,3 +551,22 @@ def _resolve_starting_capital_usdc(shared_context: dict) -> float:
     except (TypeError, ValueError):
         parsed = DEFAULT_STARTING_CAPITAL_USDC
     return parsed if parsed > 0 else DEFAULT_STARTING_CAPITAL_USDC
+
+
+STALE_CHAT_PATTERNS = [
+    re.compile(r"%\s+from start", re.IGNORECASE),
+    re.compile(r"\bdrawdown\b", re.IGNORECASE),
+    re.compile(r"\bdown\s*-?\d+(?:\.\d+)?%", re.IGNORECASE),
+    re.compile(r"\bdown over\s+\d+(?:\.\d+)?%", re.IGNORECASE),
+    re.compile(r"\belimination threshold\b", re.IGNORECASE),
+]
+
+
+def _sanitize_chat_messages(rows: list[dict]) -> list[dict]:
+    sanitized: list[dict] = []
+    for row in rows:
+        message = str(row.get("message", ""))
+        if any(pattern.search(message) for pattern in STALE_CHAT_PATTERNS):
+            continue
+        sanitized.append(row)
+    return sanitized

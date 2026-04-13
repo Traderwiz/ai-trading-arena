@@ -253,14 +253,11 @@ class SanityChecker:
             return result
 
         try:
-            state = self.get_rate_limit_state(agent_name)
+            state = self.get_rate_limit_state(agent_name, context.get("loop_number"))
         except DependencyUnavailable as exc:
             return self._reject_chat(agent_name, message, str(exc))
 
-        if state["chat_freeform_last_15m"] >= 3:
-            return self._reject_chat(agent_name, message, "Chat rate limit exceeded")
-
-        if state["chat_freeform_today"] >= 12:
+        if state["chat_freeform_this_loop"] >= 1:
             return self._reject_chat(agent_name, message, "Chat rate limit exceeded")
 
         result = ChatResult(approved=True, message=working_message, rejection_reason=None)
@@ -309,32 +306,23 @@ class SanityChecker:
         with self._lock:
             self._symbol_cache = {"loaded_at": self.now_provider(), "symbols": symbols}
 
-    def get_rate_limit_state(self, agent_name: str) -> dict:
+    def get_rate_limit_state(self, agent_name: str, loop_number: int | None = None) -> dict:
         if self.supabase is None:
             raise DependencyUnavailable("Unable to verify rate limits")
 
         now = self.now_provider()
-        fifteen_minutes_ago = now - timedelta(minutes=15)
-        start_of_day = datetime(now.year, now.month, now.day, tzinfo=now.tzinfo)
         twenty_four_hours_ago = now - timedelta(hours=24)
 
         try:
-            chat_15m = self._query_count(
-                "chat_logs",
-                [
+            if loop_number is not None:
+                chat_loop_filters = [
                     ("sender", "eq", agent_name),
                     ("trigger_type", "eq", "freeform"),
-                    ("timestamp", "gte", self._isoformat(fifteen_minutes_ago)),
-                ],
-            )
-            chat_today = self._query_count(
-                "chat_logs",
-                [
-                    ("sender", "eq", agent_name),
-                    ("trigger_type", "eq", "freeform"),
-                    ("timestamp", "gte", self._isoformat(start_of_day)),
-                ],
-            )
+                    ("loop_number", "eq", loop_number),
+                ]
+                chat_this_loop = self._query_count("chat_logs", chat_loop_filters)
+            else:
+                chat_this_loop = 0
             social_24h = self._query_count(
                 "social_posts",
                 [
@@ -346,8 +334,7 @@ class SanityChecker:
             raise DependencyUnavailable("Unable to verify rate limits") from exc
 
         return {
-            "chat_freeform_last_15m": chat_15m,
-            "chat_freeform_today": chat_today,
+            "chat_freeform_this_loop": chat_this_loop,
             "social_posts_last_24h": social_24h,
         }
 

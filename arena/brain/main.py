@@ -281,6 +281,7 @@ class ArenaLoop:
                 agent_name,
                 comms_decision.chat,
                 {
+                    "loop_number": self.loop_number,
                     "trigger_type": trigger_bundle.primary_trigger_type,
                     "recent_chat": shared_context.get("recent_chat", []),
                     "market_snapshot_symbols": diagnostics.get("market_snapshot_symbols", []),
@@ -526,40 +527,87 @@ class ArenaLoop:
             except (TypeError, ValueError):
                 continue
 
-        message_parts = ["Arena update:"]
-        if len(equities) >= 2:
-            equities.sort(key=lambda item: item[1], reverse=True)
-            leader_name, leader_equity = equities[0]
-            trailer_name, trailer_equity = equities[-1]
-            message_parts.append(
-                f"{leader_name} leads {trailer_name} ${leader_equity:.2f} to ${trailer_equity:.2f} "
-                f"(gap ${leader_equity - trailer_equity:.2f})."
-            )
-        elif equities:
-            message_parts.append(f"{equities[0][0]} sits at ${equities[0][1]:.2f}.")
-
-        if self.current_loop_trade_posts:
-            trade_summaries = [
-                f"{row['agent_name']} {row['side']} {row['quantity']} {row['symbol']} (${row['usdc_value']:.2f})"
-                for row in self.current_loop_trade_posts[:2]
-            ]
-            message_parts.append("This loop's trades: " + "; ".join(trade_summaries) + ".")
-        else:
-            message_parts.append("No trades executed this loop.")
-
-        rejection_summaries = []
+        rejection_summaries: list[str] = []
         for agent_name in processed_agents:
             diagnostics = self.current_loop_diagnostics.get(agent_name, {})
             chat_validation = diagnostics.get("chat_validation") or {}
             reason = chat_validation.get("rejection_reason")
             if reason:
                 rejection_summaries.append(f"{agent_name} chat blocked ({reason.lower()})")
-        if rejection_summaries:
-            message_parts.append("Feed coverage: " + "; ".join(rejection_summaries[:2]) + ".")
+        if len(equities) >= 2:
+            equities.sort(key=lambda item: item[1], reverse=True)
+            leader_name, leader_equity = equities[0]
+            trailer_name, trailer_equity = equities[-1]
+        elif equities:
+            leader_name, leader_equity = equities[0]
+            trailer_name, trailer_equity = equities[0]
         else:
-            message_parts.append("Agents stayed quiet, so Arena is calling the round.")
+            leader_name, leader_equity = ("arena", 0.0)
+            trailer_name, trailer_equity = ("arena", 0.0)
 
-        return " ".join(message_parts)
+        gap = leader_equity - trailer_equity
+        trade_summaries = [
+            f"{row['agent_name']} {row['side']} {row['quantity']} {row['symbol']} (${row['usdc_value']:.2f})"
+            for row in self.current_loop_trade_posts[:2]
+        ]
+        coverage_text = (
+            "Feed coverage: " + "; ".join(rejection_summaries[:2]) + "."
+            if rejection_summaries
+            else "Feed coverage held, but the agents left the mic to Arena this loop."
+        )
+        mode = self.loop_number % 5
+
+        if mode == 0:
+            lead_line = (
+                f"{leader_name} leads {trailer_name} ${leader_equity:.2f} to ${trailer_equity:.2f} (gap ${gap:.2f})."
+                if leader_name != trailer_name
+                else f"{leader_name} sits at ${leader_equity:.2f}."
+            )
+            trade_line = (
+                "This loop's trades: " + "; ".join(trade_summaries) + "."
+                if trade_summaries
+                else "No trades executed this loop."
+            )
+            return f"Arena update: {lead_line} {trade_line} {coverage_text}"
+
+        if mode == 1:
+            if trade_summaries:
+                trade_line = "Trade tape: " + "; ".join(trade_summaries) + "."
+            else:
+                trade_line = f"The tape stayed quiet while {leader_name} protected a ${gap:.2f} edge."
+            return f"Arena tape: {trade_line} {coverage_text}"
+
+        if mode == 2:
+            if leader_name != trailer_name:
+                tension_line = (
+                    f"Endgame check: only ${gap:.2f} separates {leader_name} and {trailer_name}, "
+                    f"with the board sitting at ${leader_equity:.2f} vs ${trailer_equity:.2f}."
+                )
+            else:
+                tension_line = f"Endgame check: {leader_name} holds at ${leader_equity:.2f}."
+            trade_line = "No one pulled the trigger this loop." if not trade_summaries else "Pressure release came through " + "; ".join(trade_summaries) + "."
+            return f"{tension_line} {trade_line} {coverage_text}"
+
+        if mode == 3:
+            rivalry_line = (
+                f"Rivalry desk: {leader_name} is up ${gap:.2f} on {trailer_name}."
+                if leader_name != trailer_name
+                else f"Rivalry desk: {leader_name} is shadowboxing at ${leader_equity:.2f}."
+            )
+            action_line = (
+                "Latest move: " + "; ".join(trade_summaries) + "."
+                if trade_summaries
+                else "Latest move: all talk, no fills."
+            )
+            return f"{rivalry_line} {action_line} {coverage_text}"
+
+        activity_line = (
+            f"Standings pulse: {leader_name} remains in front at ${leader_equity:.2f}, with {trailer_name} at ${trailer_equity:.2f}."
+            if leader_name != trailer_name
+            else f"Standings pulse: {leader_name} remains at ${leader_equity:.2f}."
+        )
+        quiet_line = "No trades hit the book this round." if not trade_summaries else "Trades on the book: " + "; ".join(trade_summaries) + "."
+        return f"{activity_line} {quiet_line} {coverage_text}"
 
     def _log_social(self, agent_name: str, content: str, x_post_id: str | None, status: str = "posted") -> None:
         self.supabase.table("social_posts").insert(

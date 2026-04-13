@@ -16,7 +16,7 @@ from arena.dashboard.components.leaderboard import render_leaderboard
 from arena.dashboard.components.operator_panel import render_operator_panel
 from arena.dashboard.components.portfolio import render_portfolios
 from arena.dashboard.components.trades_table import render_trades
-from arena.dashboard.config import DEFAULT_INTERVAL_SECONDS, DISCLAIMER, REFRESH_INTERVAL_MS, derive_phase, derive_status
+from arena.dashboard.config import CHAT_FEED_FETCH_LIMIT, DEFAULT_INTERVAL_SECONDS, DISCLAIMER, REFRESH_INTERVAL_MS, derive_phase, derive_status
 from arena.dashboard.supabase_client import get_client
 from arena.dashboard.time_utils import format_timestamp_eastern
 
@@ -39,7 +39,7 @@ def main() -> None:
     positions_rows = client.get_current_positions()
     trades_rows = client.get_recent_trades(limit=20)
     all_trades_rows = client.get_recent_trades(limit=200)
-    chat_rows = client.get_recent_chat(limit=50)
+    chat_rows = client.get_recent_chat(limit=CHAT_FEED_FETCH_LIMIT)
     activity_rows = client.get_current_week_activity() or client.get_activity_tracking()
     elimination_rows = client.get_eliminations()
     latest_loop = client.get_latest_loop_log()

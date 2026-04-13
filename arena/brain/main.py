@@ -622,6 +622,8 @@ class ArenaLoop:
         ).execute()
 
     def _write_standings(self, agent_name: str, wallet_state) -> None:
+        if self._agent_has_newer_standings(agent_name):
+            return
         pnl_percent = ((wallet_state.total_equity_usdc - self.starting_capital_usdc) / self.starting_capital_usdc) * 100
         invested = sum(position.value_usdc for position in wallet_state.positions.values())
         self.supabase.table("standings").insert(
@@ -638,6 +640,8 @@ class ArenaLoop:
         ).execute()
 
     def _replace_positions(self, agent_name: str, wallet_state) -> None:
+        if self._agent_has_newer_standings(agent_name):
+            return
         try:
             self.supabase.table("positions").delete().eq("agent_name", agent_name).execute()
         except Exception:  # noqa: BLE001
@@ -799,6 +803,16 @@ class ArenaLoop:
             "cash_usdc": wallet_state.cash_usdc,
             "symbol_limits": symbol_limits,
         }
+
+    def _agent_has_newer_standings(self, agent_name: str) -> bool:
+        rows = self._fetch_rows("standings", {"agent_name": agent_name}, order=("loop_number", True), limit=1)
+        if not rows:
+            return False
+        try:
+            latest_loop_number = int(rows[0].get("loop_number") or 0)
+        except (TypeError, ValueError):
+            return False
+        return latest_loop_number > self.loop_number
 
 
 def _resolve_env(value):

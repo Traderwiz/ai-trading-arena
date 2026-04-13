@@ -5,9 +5,9 @@ import streamlit as st
 from arena.dashboard.config import AGENT_COLORS, AGENT_META, PNL_NEGATIVE, PNL_POSITIVE, STARTING_CAPITAL_USDC, ordinal
 
 
-def render_leaderboard(leaderboard_rows: list[dict], agents: list[dict], eliminations: list[dict]) -> None:
+def render_leaderboard(current_standings_rows: list[dict], agents: list[dict], eliminations: list[dict]) -> None:
     st.subheader("Leaderboard")
-    rows = _build_leaderboard_rows(leaderboard_rows, agents, eliminations)
+    rows = _build_leaderboard_rows(current_standings_rows, agents, eliminations)
     if not rows:
         st.info("Competition not yet started.")
         return
@@ -35,13 +35,18 @@ def render_leaderboard(leaderboard_rows: list[dict], agents: list[dict], elimina
             )
 
 
-def _build_leaderboard_rows(leaderboard_rows: list[dict], agents: list[dict], eliminations: list[dict]) -> list[dict]:
+def _build_leaderboard_rows(current_standings_rows: list[dict], agents: list[dict], eliminations: list[dict]) -> list[dict]:
     agent_map = {agent["agent_name"]: agent for agent in agents}
     elimination_map = {row["agent_name"]: row for row in eliminations}
     rows = []
 
-    if leaderboard_rows:
-        for row in leaderboard_rows:
+    if current_standings_rows:
+        ranked_rows = sorted(
+            current_standings_rows,
+            key=lambda row: float(row.get("pnl_percent", 0.0)),
+            reverse=True,
+        )
+        for index, row in enumerate(ranked_rows, start=1):
             agent = agent_map.get(row["agent_name"], {})
             meta = AGENT_META.get(row["agent_name"], {})
             x_handle = agent.get("x_handle")
@@ -50,7 +55,7 @@ def _build_leaderboard_rows(leaderboard_rows: list[dict], agents: list[dict], el
                     "agent_name": row["agent_name"],
                     "display_name": row.get("display_name") or meta.get("display_name", row["agent_name"].title()),
                     "archetype": meta.get("archetype", ""),
-                    "rank": row.get("rank", len(rows) + 1),
+                    "rank": index,
                     "total_equity_usdc": float(row.get("total_equity_usdc", STARTING_CAPITAL_USDC)),
                     "pnl_percent": float(row.get("pnl_percent", 0.0)),
                     "num_positions": int(row.get("num_positions", 0)),

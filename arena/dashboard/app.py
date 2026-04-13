@@ -33,9 +33,8 @@ st_autorefresh(interval=REFRESH_INTERVAL_MS, key="arena_refresh")
 def main() -> None:
     client = get_client()
     agents = client.get_agents()
-    leaderboard_rows = client.get_leaderboard()
     standings_rows = client.get_standings_history()
-    current_standings = client.get_current_standings()
+    current_standings = _derive_current_standings(standings_rows)
     positions_rows = client.get_current_positions()
     trades_rows = client.get_recent_trades(limit=20)
     all_trades_rows = client.get_recent_trades(limit=200)
@@ -55,7 +54,7 @@ def main() -> None:
     )
 
     _render_header(competition_status, current_phase, latest_loop, latest_completed_loop)
-    render_leaderboard(leaderboard_rows, agents, elimination_rows)
+    render_leaderboard(current_standings, agents, elimination_rows)
     render_equity_chart(standings_rows)
     render_portfolios(agents, current_standings, positions_rows)
     render_trades(trades_rows)
@@ -96,6 +95,25 @@ def _render_footer() -> None:
     st.markdown("[@AITradingArena](https://x.com/AITradingArena)")
     st.caption("Season 1 - Experiment")
     st.caption(DISCLAIMER)
+
+
+def _derive_current_standings(standings_rows: list[dict]) -> list[dict]:
+    latest_by_agent: dict[str, dict] = {}
+    sorted_rows = sorted(
+        standings_rows,
+        key=lambda row: (
+            int(row.get("loop_number") or 0),
+            str(row.get("timestamp") or ""),
+            int(row.get("id") or 0),
+        ),
+        reverse=True,
+    )
+    for row in sorted_rows:
+        agent_name = row.get("agent_name")
+        if not agent_name or agent_name in latest_by_agent:
+            continue
+        latest_by_agent[agent_name] = row
+    return list(latest_by_agent.values())
 
 
 if __name__ == "__main__":

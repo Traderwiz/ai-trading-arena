@@ -48,10 +48,7 @@ def main() -> None:
     active_count = len([row for row in agents if row.get("status") == "active"])
     elimination_count = len(elimination_rows)
     current_phase = derive_phase(active_count, elimination_count)
-    competition_status = "COMPLETE" if active_count <= 1 and agents else derive_status(
-        (latest_completed_loop or latest_loop or {}).get("completed_at"),
-        DEFAULT_INTERVAL_SECONDS,
-    )
+    competition_status = _derive_competition_status(active_count, agents, latest_loop, latest_completed_loop)
 
     _render_header(competition_status, current_phase, latest_loop, latest_completed_loop)
     render_leaderboard(current_standings, agents, elimination_rows)
@@ -80,7 +77,14 @@ def _render_header(
     if not last_updated:
         last_updated = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     cols[2].markdown(f"**Last updated:** {format_timestamp_eastern(last_updated, fallback=last_updated)}")
-    if latest_loop and latest_loop.get("completed_at") is None and latest_loop.get("started_at"):
+    if _is_manual_pause_marker(latest_loop):
+        pause_reason = ((latest_loop or {}).get("errors") or {}).get("pause_reason")
+        paused_at = format_timestamp_eastern(latest_loop.get("started_at"), fallback=str(latest_loop.get("started_at")))
+        caption = f"Pilot paused at {paused_at}."
+        if pause_reason:
+            caption += f" {pause_reason}"
+        st.caption(caption)
+    elif latest_loop and latest_loop.get("completed_at") is None and latest_loop.get("started_at"):
         st.caption(f"Loop {latest_loop.get('loop_number')} in progress since {format_timestamp_eastern(latest_loop.get('started_at'), fallback=str(latest_loop.get('started_at')))}")
     st.warning(DISCLAIMER, icon="⚠️")
 
@@ -114,6 +118,29 @@ def _derive_current_standings(standings_rows: list[dict]) -> list[dict]:
             continue
         latest_by_agent[agent_name] = row
     return list(latest_by_agent.values())
+
+
+def _derive_competition_status(
+    active_count: int,
+    agents: list[dict],
+    latest_loop: dict | None,
+    latest_completed_loop: dict | None,
+) -> str:
+    if active_count <= 1 and agents:
+        return "COMPLETE"
+    if _is_manual_pause_marker(latest_loop):
+        return "PAUSED"
+    return derive_status(
+        (latest_completed_loop or latest_loop or {}).get("completed_at"),
+        DEFAULT_INTERVAL_SECONDS,
+    )
+
+
+def _is_manual_pause_marker(loop_row: dict | None) -> bool:
+    if not loop_row or loop_row.get("completed_at") is not None:
+        return False
+    errors = loop_row.get("errors") or {}
+    return errors.get("system_status") == "paused"
 
 
 if __name__ == "__main__":
